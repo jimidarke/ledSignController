@@ -150,4 +150,7 @@
   #define LED_PIN     13
 #endif
 
+#define MQTT_MAX_PACKET_SIZE 512
+#define MQTT_KEEPALIVE 60
+
 #endif      //defines_h

@@ -1,14 +1,11 @@
 
-#define MQTT_MAX_PACKET_SIZE 512
-
-#include "./BETABRITE.h"
-#include <SPI.h>
+#include "defines.h"
+#include <SPI.h> 
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
-// wifi manager
-#include "defines.h"
-#include "Credentials.h"
+#include "BETABRITE.h"
+#include "Credentials.h" 
 #include "dynamicParams.h"
 
 // examples of strings with options
