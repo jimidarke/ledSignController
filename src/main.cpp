@@ -13,17 +13,16 @@
 // [red,interlock]Monday
 // [green,rotate]
 
-char wifi_ssid[32] = "default_ssid";
-char wifi_pass[32] = "default_password";
-char mqtt_server[40] = "default_mqtt_server";
+char wifi_ssid[32] = SIGN_DEFAULT_SSID;
+char wifi_pass[32] = SIGN_DEFAULT_PASS;
+char mqtt_server[40] = "";
 uint16_t mqtt_port = 1883;
 char mqtt_user[32] = "";
 char mqtt_pass[32] = "";
 int sign_max_files = 5;       // number of files on the sign (before they get overridden by new ones)
-int sign_priority_delay = 30; // seconds to display priority messages
 
 // POSIX time zone string for Mountain Time with DST
-const char* tz = "MST7MDT,M3.2.0/2,M11.1.0/2";
+const char* tz = SIGN_TIMEZONE_POSIX;
 
 // NTP server
 const char* ntpServer = "pool.ntp.org";
@@ -31,13 +30,13 @@ const char* ntpServer = "pool.ntp.org";
 WiFiClient espClient;
 PubSubClient client(espClient);
 ESP_WiFiManager_Lite* ESP_WiFiManager;
+BETABRITE bb(1, 16, 17); // RX, TX
 
 bool inPriority = false;
 bool alreadyShowingOfflineMessage = false;
 bool ismqttConfigured = false;
 String LEDSIGNID; // will update later using MAC address
 
-BETABRITE bb(1, 16, 17); // RX, TX
 char bbTextFileName = 'A';
 int numFiles = sign_max_files; // replace this
 unsigned long lastUpdate = 0;
@@ -49,10 +48,6 @@ void connectWiFi();
 void reconnectMQTT();
 void callback(char *topic, byte *message, unsigned int length);
 unsigned long getUptime();
-String getIPAddress();
-String getMACAddress();
-int getRSSI();
-
 
 #if USING_CUSTOMS_STYLE
 const char NewCustomsStyle[] PROGMEM = "<style>div,input{padding:5px;font-size:1em;}input{width:95%;}body{text-align: center;}"\
@@ -155,12 +150,13 @@ String getFriendlyDateTime() {
   strftime(buffer, 80, "%m/%d %I:%M %p", timeinfo);
   return String(buffer);
 }
+
 void clearTextFiles() { //clears all values i.e. wipes the screen
   //iterates from A to numFiles and clears the text files
   for (char i = 'A'; i < 'A' + numFiles + 1; i++)
   {
     Serial.print("Clearing Text File: " ); Serial.println(i);
-    bb.WriteTextFile(i, "", BB_COL_AUTOCOLOR, BB_DP_TOPLINE, BB_DM_COMPROTATE, BB_SDM_TWINKLE);
+    bb.WriteTextFile(i, "", SIGN_DEFAULT_COLOUR, SIGN_DEFAULT_POSITION, SIGN_DEFAULT_MODE, SIGN_DEFAULT_SPECIAL);
   }
   bbTextFileName = 'A';
 }
@@ -168,16 +164,17 @@ void clearTextFiles() { //clears all values i.e. wipes the screen
 void showClock() { //renders the time
   String dtime = getFriendlyDateTime();
   Serial.println(dtime);
-  char color = BB_COL_AUTOCOLOR;
-  char position = BB_DP_TOPLINE;
-  char mode = BB_DM_CLOCK;
-  char special = BB_SDM_TWINKLE;
+  char color = SIGN_CLOCK_COLOUR;
+  char position = SIGN_CLOCK_POSITION;
+  char mode = SIGN_CLOCK_MODE;
+  char special = SIGN_CLOCK_SPECIAL;
   if (!inPriority) {
     bb.CancelPriorityTextFile();
     bb.WritePriorityTextFile(dtime.c_str(), color, position, mode, special);
     clockStart = millis();
   }
 }
+
 void initSign() {
   //init sign
   Serial.println("Initializing LED sign through TTL - RS232 Serial connection");
@@ -190,16 +187,10 @@ void initSign() {
   Serial.println("Setting Sign Memory Config...");
   bb.SetMemoryConfiguration(bbTextFileName, numFiles);
   delay(500);
-  char color = BB_COL_AUTOCOLOR;
-  char position = BB_DP_TOPLINE;
-  char mode = BB_DM_AUTOMODE;
-  char special = BB_SDM_INTERLOCK;
   Serial.println("Sending Default Message");
-  bb.WritePriorityTextFile("Darke Tech", color, position, mode, special);
+  bb.WritePriorityTextFile(SIGN_INIT_STRING, SIGN_INIT_COLOUR, SIGN_INIT_POSITION, SIGN_INIT_MODE, SIGN_INIT_SPECIAL);
   inPriority = false;
   clockStart = 0;
-  //delay(5000);
-  //bb.CancelPriorityTextFile();
 }
 
 //smart delay to allow background processes to still occur
@@ -208,18 +199,18 @@ void smartDelay(int delay_ms) {
   while (millis() < stoptime) {
     if (ismqttConfigured) {
       reconnectMQTT();
-      client.loop();
+      client.loop(); //callbacks will check for messages and config updates
     }
     //turn off clock if times up
-    if (millis() - clockStart > 10000 && clockStart > 0 && !inPriority) { //hide after ten seconds
+    if (millis() - clockStart > SIGN_SHOW_CLOCK_DELAY_MS && clockStart > 0 && !inPriority) { //hide after ten seconds
       bb.CancelPriorityTextFile();
     }
-    if (millis() - lastUpdate > 60000) { //send telemetry and show clock
+    if (millis() - lastUpdate > 60000) { //send telemetry and show clock every minute-ish
       sendSensorUpdates();
       showClock();
       lastUpdate = millis();
     }
-    delay(5);
+    delay(1);
   }
 }
 
