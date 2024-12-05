@@ -56,6 +56,13 @@ String getIPAddress();
 String getMACAddress();
 int getRSSI();
 
+
+#if USING_CUSTOMS_STYLE
+const char NewCustomsStyle[] PROGMEM = "<style>div,input{padding:5px;font-size:1em;}input{width:95%;}body{text-align: center;}"\
+                                       "button{background-color:blue;color:white;line-height:2.4rem;font-size:1.2rem;width:100%;}fieldset{border-radius:0.3rem;margin:0px;}</style>";
+#endif
+
+
 void sendSensorUpdates() {
   if (!ismqttConfigured)
     return;
@@ -151,6 +158,75 @@ String getFriendlyDateTime() {
   strftime(buffer, 80, "%m/%d %I:%M %p", timeinfo);
   return String(buffer);
 }
+void clearTextFiles() { //clears all values i.e. wipes the screen
+  //iterates from A to numFiles and clears the text files
+  for (char i = 'A'; i < 'A' + numFiles + 1; i++)
+  {
+    Serial.print("Clearing Text File: " ); Serial.println(i);
+    bb.WriteTextFile(i, "", BB_COL_AUTOCOLOR, BB_DP_TOPLINE, BB_DM_COMPROTATE, BB_SDM_TWINKLE);
+  }
+  bbTextFileName = 'A';
+}
+
+void showClock() { //renders the time
+  String dtime = getFriendlyDateTime();
+  Serial.println(dtime);
+  char color = BB_COL_AUTOCOLOR;
+  char position = BB_DP_TOPLINE;
+  char mode = BB_DM_CLOCK;
+  char special = BB_SDM_TWINKLE;
+  if (!inPriority) {
+    bb.CancelPriorityTextFile();
+    bb.WritePriorityTextFile(dtime.c_str(), color, position, mode, special);
+    clockStart = millis();
+  }
+}
+void initSign() {
+  //init sign
+  Serial.println("Initializing LED sign through TTL - RS232 Serial connection");
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  LEDSIGNID = mac;
+  Serial.print("Sign ID: ");
+  Serial.println(LEDSIGNID);
+  bbTextFileName = 'A';
+  Serial.println("Setting Sign Memory Config...");
+  bb.SetMemoryConfiguration(bbTextFileName, numFiles);
+  delay(500);
+  char color = BB_COL_AUTOCOLOR;
+  char position = BB_DP_TOPLINE;
+  char mode = BB_DM_AUTOMODE;
+  char special = BB_SDM_INTERLOCK;
+  Serial.println("Sending Default Message");
+  bb.WritePriorityTextFile("Darke Tech", color, position, mode, special);
+  inPriority = false;
+  clockStart = 0;
+  //delay(5000);
+  //bb.CancelPriorityTextFile();
+}
+
+//smart delay to allow background processes to still occur
+void smartDelay(int delay_ms) {
+  int stoptime = millis() + delay_ms;
+  while (millis() < stoptime) {
+    if (ismqttConfigured) {
+      reconnectMQTT();
+      client.loop();
+    }
+    //turn off clock if times up
+    if (millis() - clockStart > 10000 && clockStart > 0 && !inPriority) { //hide after ten seconds
+      bb.CancelPriorityTextFile();
+    }
+    if (millis() - lastUpdate > 60000) { //send telemetry and show clock
+      sendSensorUpdates();
+      showClock();
+      lastUpdate = millis();
+    }
+    delay(5);
+  }
+}
+
+
 
 void parsePayload(const char *msg) {
   // check if first character is # this will clear the sign
@@ -428,17 +504,6 @@ void parsePayload(const char *msg) {
   }
 }
 
-void clearTextFiles() { //clears all values i.e. wipes the screen
-  //iterates from A to numFiles and clears the text files
-  for (char i = 'A'; i < 'A' + numFiles + 1; i++)
-  {
-    Serial.print("Clearing Text File: " ); Serial.println(i);
-    bb.WriteTextFile(i, "", BB_COL_AUTOCOLOR, BB_DP_TOPLINE, BB_DM_COMPROTATE, BB_SDM_TWINKLE);
-  }
-  bbTextFileName = 'A';
-}
-
-
 unsigned long getUptime()
 {
   return millis() / 1000; // Uptime in seconds
@@ -488,35 +553,6 @@ void reconnectMQTT()
 }
 
 
-void initSign() {
-  //init sign
-  Serial.println("Initializing LED sign through TTL - RS232 Serial connection");
-  String mac = WiFi.macAddress();
-  mac.replace(":", "");
-  LEDSIGNID = mac;
-  Serial.print("Sign ID: ");
-  Serial.println(LEDSIGNID);
-  bbTextFileName = 'A';
-  Serial.println("Setting Sign Memory Config...");
-  bb.SetMemoryConfiguration(bbTextFileName, numFiles);
-  delay(500);
-  char color = BB_COL_AUTOCOLOR;
-  char position = BB_DP_TOPLINE;
-  char mode = BB_DM_AUTOMODE;
-  char special = BB_SDM_INTERLOCK;
-  Serial.println("Sending Default Message");
-  bb.WritePriorityTextFile("Darke Tech", color, position, mode, special);
-  inPriority = false;
-  clockStart = 0;
-  //delay(5000);
-  //bb.CancelPriorityTextFile();
-}
-
-#if USING_CUSTOMS_STYLE
-const char NewCustomsStyle[] PROGMEM = "<style>div,input{padding:5px;font-size:1em;}input{width:95%;}body{text-align: center;}"\
-                                       "button{background-color:blue;color:white;line-height:2.4rem;font-size:1.2rem;width:100%;}fieldset{border-radius:0.3rem;margin:0px;}</style>";
-#endif
-
 void initMQTT() { //reads the stored values
   // 0 - mqtt_server 1 - mqtt_port 2 - mqtt_user 3 - mqtt_pass
   // take from myMenuItem
@@ -558,40 +594,7 @@ void setup() {
   Serial.println("Starting main loop");
 }
 
-void showClock() { //renders the time
-  String dtime = getFriendlyDateTime();
-  Serial.println(dtime);
-  char color = BB_COL_AUTOCOLOR;
-  char position = BB_DP_TOPLINE;
-  char mode = BB_DM_CLOCK;
-  char special = BB_SDM_TWINKLE;
-  if (!inPriority) {
-    bb.CancelPriorityTextFile();
-    bb.WritePriorityTextFile(dtime.c_str(), color, position, mode, special);
-    clockStart = millis();
-  }
-}
 
-//smart delay to allow background processes to still occur
-void smartDelay(int delay_ms) {
-  int stoptime = millis() + delay_ms;
-  while (millis() < stoptime) {
-    if (ismqttConfigured) {
-      reconnectMQTT();
-      client.loop();
-    }
-    //turn off clock if times up
-    if (millis() - clockStart > 10000 && clockStart > 0 && !inPriority) { //hide after ten seconds
-      bb.CancelPriorityTextFile();
-    }
-    if (millis() - lastUpdate > 60000) { //send telemetry and show clock
-      sendSensorUpdates();
-      showClock();
-      lastUpdate = millis();
-    }
-    delay(5);
-  }
-}
 
 void loop() {
   ESP_WiFiManager->run(); //manages the wifi connections
