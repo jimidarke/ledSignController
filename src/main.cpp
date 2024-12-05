@@ -4,9 +4,6 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
-#include "BETABRITE.h"
-#include "Credentials.h" 
-#include "dynamicParams.h"
 
 // examples of strings with options
 // [red]as of 10/28/12 07:38pm

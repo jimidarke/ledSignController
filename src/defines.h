@@ -153,4 +153,9 @@
 #define MQTT_MAX_PACKET_SIZE 512
 #define MQTT_KEEPALIVE 60
 
+#include "BETABRITE.h"
+#include "Credentials.h" 
+#include "dynamicParams.h"
+
+
 #endif      //defines_h
