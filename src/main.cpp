@@ -1,6 +1,6 @@
 
 #include "defines.h"
-#include <SPI.h> 
+#include <SPI.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
@@ -19,17 +19,17 @@ char mqtt_server[40] = "";
 uint16_t mqtt_port = 1883;
 char mqtt_user[32] = "";
 char mqtt_pass[32] = "";
-int sign_max_files = 5;       // number of files on the sign (before they get overridden by new ones)
+int sign_max_files = 5; // number of files on the sign (before they get overridden by new ones)
 
 // POSIX time zone string for Mountain Time with DST
-const char* tz = SIGN_TIMEZONE_POSIX;
+const char *tz = SIGN_TIMEZONE_POSIX;
 
 // NTP server
-const char* ntpServer = "pool.ntp.org";
+const char *ntpServer = "pool.ntp.org";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
-ESP_WiFiManager_Lite* ESP_WiFiManager;
+ESP_WiFiManager_Lite *ESP_WiFiManager;
 BETABRITE bb(1, 16, 17); // RX, TX
 
 bool inPriority = false;
@@ -50,12 +50,12 @@ void callback(char *topic, byte *message, unsigned int length);
 unsigned long getUptime();
 
 #if USING_CUSTOMS_STYLE
-const char NewCustomsStyle[] PROGMEM = "<style>div,input{padding:5px;font-size:1em;}input{width:95%;}body{text-align: center;}"\
+const char NewCustomsStyle[] PROGMEM = "<style>div,input{padding:5px;font-size:1em;}input{width:95%;}body{text-align: center;}"
                                        "button{background-color:blue;color:white;line-height:2.4rem;font-size:1.2rem;width:100%;}fieldset{border-radius:0.3rem;margin:0px;}</style>";
 #endif
 
-
-void sendSensorUpdates() {
+void sendSensorUpdates()
+{
   if (!ismqttConfigured)
     return;
   // RSSI
@@ -79,56 +79,65 @@ void callback(char *topic, byte *message, unsigned int length)
   parsePayload(messageTemp.c_str());
 }
 
-void printDateTime(bool UseMilitaryTime = false) {
+void printDateTime(bool UseMilitaryTime = false)
+{
   struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
+  if (!getLocalTime(&timeinfo))
+  {
     Serial.println("Failed to obtain time");
     return;
   }
 
   // Print date
   Serial.print("Date: ");
-  Serial.print(timeinfo.tm_year + 1900);  // Year
+  Serial.print(timeinfo.tm_year + 1900); // Year
   Serial.print("-");
-  Serial.print((timeinfo.tm_mon + 1) < 10 ? "0" : "");  // Leading zero for month
-  Serial.print(timeinfo.tm_mon + 1);      // Month
+  Serial.print((timeinfo.tm_mon + 1) < 10 ? "0" : ""); // Leading zero for month
+  Serial.print(timeinfo.tm_mon + 1);                   // Month
   Serial.print("-");
-  Serial.print(timeinfo.tm_mday < 10 ? "0" : "");       // Leading zero for day
-  Serial.println(timeinfo.tm_mday);       // Day
+  Serial.print(timeinfo.tm_mday < 10 ? "0" : ""); // Leading zero for day
+  Serial.println(timeinfo.tm_mday);               // Day
 
   // Determine hour and AM/PM for 12-hour format if needed
   int displayHour = timeinfo.tm_hour;
   bool isPM = false;
 
-  if (!UseMilitaryTime) {
-    if (displayHour >= 12) {
+  if (!UseMilitaryTime)
+  {
+    if (displayHour >= 12)
+    {
       isPM = true;
-      if (displayHour > 12) displayHour -= 12;  // Convert to 12-hour format
-    } else if (displayHour == 0) {
-      displayHour = 12;  // Midnight in 12-hour format
+      if (displayHour > 12)
+        displayHour -= 12; // Convert to 12-hour format
+    }
+    else if (displayHour == 0)
+    {
+      displayHour = 12; // Midnight in 12-hour format
     }
   }
 
   // Print time
   Serial.print("Time: ");
-  Serial.print(displayHour < 10 ? "0" : "");  // Leading zero for hour
+  Serial.print(displayHour < 10 ? "0" : ""); // Leading zero for hour
   Serial.print(displayHour);
   Serial.print(":");
-  Serial.print(timeinfo.tm_min < 10 ? "0" : "");  // Leading zero for minute
+  Serial.print(timeinfo.tm_min < 10 ? "0" : ""); // Leading zero for minute
   Serial.print(timeinfo.tm_min);
   Serial.print(":");
-  Serial.print(timeinfo.tm_sec < 10 ? "0" : "");  // Leading zero for second
+  Serial.print(timeinfo.tm_sec < 10 ? "0" : ""); // Leading zero for second
   Serial.print(timeinfo.tm_sec);
 
-  if (!UseMilitaryTime) {
+  if (!UseMilitaryTime)
+  {
     Serial.print(isPM ? " PM" : " AM");
   }
   Serial.println();
 }
 
-void showOfflineConnectionDetails() //displays on the sign the wifi info and such when its offline
+void showOfflineConnectionDetails() // displays on the sign the wifi info and such when its offline
 {
-  if (!alreadyShowingOfflineMessage) {
+  if (!alreadyShowingOfflineMessage)
+  {
     // default options
     char color = BB_COL_AUTOCOLOR;
     char position = BB_DP_TOPLINE;
@@ -142,7 +151,8 @@ void showOfflineConnectionDetails() //displays on the sign the wifi info and suc
   }
 }
 
-String getFriendlyDateTime() {
+String getFriendlyDateTime()
+{
   time_t now = time(nullptr);
   struct tm *timeinfo;
   timeinfo = localtime(&now);
@@ -151,32 +161,37 @@ String getFriendlyDateTime() {
   return String(buffer);
 }
 
-void clearTextFiles() { //clears all values i.e. wipes the screen
-  //iterates from A to numFiles and clears the text files
+void clearTextFiles()
+{ // clears all values i.e. wipes the screen
+  // iterates from A to numFiles and clears the text files
   for (char i = 'A'; i < 'A' + numFiles + 1; i++)
   {
-    Serial.print("Clearing Text File: " ); Serial.println(i);
+    Serial.print("Clearing Text File: ");
+    Serial.println(i);
     bb.WriteTextFile(i, "", SIGN_DEFAULT_COLOUR, SIGN_DEFAULT_POSITION, SIGN_DEFAULT_MODE, SIGN_DEFAULT_SPECIAL);
   }
   bbTextFileName = 'A';
 }
 
-void showClock() { //renders the time
+void showClock()
+{ // renders the time
   String dtime = getFriendlyDateTime();
   Serial.println(dtime);
   char color = SIGN_CLOCK_COLOUR;
   char position = SIGN_CLOCK_POSITION;
   char mode = SIGN_CLOCK_MODE;
   char special = SIGN_CLOCK_SPECIAL;
-  if (!inPriority) {
+  if (!inPriority)
+  {
     bb.CancelPriorityTextFile();
     bb.WritePriorityTextFile(dtime.c_str(), color, position, mode, special);
     clockStart = millis();
   }
 }
 
-void initSign() {
-  //init sign
+void initSign()
+{
+  // init sign
   Serial.println("Initializing LED sign through TTL - RS232 Serial connection");
   String mac = WiFi.macAddress();
   mac.replace(":", "");
@@ -193,19 +208,24 @@ void initSign() {
   clockStart = 0;
 }
 
-//smart delay to allow background processes to still occur
-void smartDelay(int delay_ms) {
+// smart delay to allow background processes to still occur
+void smartDelay(int delay_ms)
+{
   int stoptime = millis() + delay_ms;
-  while (millis() < stoptime) {
-    if (ismqttConfigured) {
+  while (millis() < stoptime)
+  {
+    if (ismqttConfigured)
+    {
       reconnectMQTT();
-      client.loop(); //callbacks will check for messages and config updates
+      client.loop(); // callbacks will check for messages and config updates
     }
-    //turn off clock if times up
-    if (millis() - clockStart > SIGN_SHOW_CLOCK_DELAY_MS && clockStart > 0 && !inPriority) { //hide after ten seconds
+    // turn off clock if times up
+    if (millis() - clockStart > SIGN_SHOW_CLOCK_DELAY_MS && clockStart > 0 && !inPriority)
+    { // hide after ten seconds
       bb.CancelPriorityTextFile();
     }
-    if (millis() - lastUpdate > 60000) { //send telemetry and show clock every minute-ish
+    if (millis() - lastUpdate > 60000)
+    { // send telemetry and show clock every minute-ish
       sendSensorUpdates();
       showClock();
       lastUpdate = millis();
@@ -214,18 +234,19 @@ void smartDelay(int delay_ms) {
   }
 }
 
-
-
-void parsePayload(const char *msg) {
+void parsePayload(const char *msg)
+{
   // check if first character is # this will clear the sign
-  if (msg[0] == '#') {
+  if (msg[0] == '#')
+  {
     Serial.println("Clearing Internal Data");
     clearTextFiles();
     initSign();
     return;
   }
 
-  if (msg[0] == '^') { //factory reset
+  if (msg[0] == '^')
+  { // factory reset
     clearTextFiles();
     Serial.println("");
     Serial.println("Clearing All Data and Resetting");
@@ -241,8 +262,9 @@ void parsePayload(const char *msg) {
   char special = BB_SDM_TWINKLE;
 
   // check if first character is a * to denote a priority message
-  if (msg[0] == '*') {
-    inPriority = true; //global var
+  if (msg[0] == '*')
+  {
+    inPriority = true; // global var
     msg++;
     Serial.println("### Priority Message ###");
     Serial.println(msg);
@@ -260,7 +282,8 @@ void parsePayload(const char *msg) {
   // handle options
   char *open_delim = strchr(msg, '[');
   char *close_delim = strchr(msg, ']');
-  if (open_delim == msg && close_delim != NULL && !inPriority)  {
+  if (open_delim == msg && close_delim != NULL && !inPriority)
+  {
     int options_length = close_delim - open_delim;
     char options[options_length];
     strncpy(options, msg + 1, options_length - 1);
@@ -483,7 +506,7 @@ void parsePayload(const char *msg) {
   Serial.print(" File: ");
   Serial.println(bbTextFileName);
   Serial.println(msg);
-  //bbTextFileName++;
+  // bbTextFileName++;
   bb.WriteTextFile(bbTextFileName++, msg, color, position, mode, special);
   // check if more than numfiles files have been created and reset counter
   if (bbTextFileName > 'A' + numFiles + 1)
@@ -512,13 +535,14 @@ int getRSSI()
   return WiFi.RSSI();
 }
 
-
 // Reconnect to MQTT if disconnected
 void reconnectMQTT()
 {
   int c = 0;
-  while (!client.connected()) {
-    if (client.connect(("LEDSign_" + LEDSIGNID).c_str(), mqtt_user, mqtt_pass)) {
+  while (!client.connected())
+  {
+    if (client.connect(("LEDSign_" + LEDSIGNID).c_str(), mqtt_user, mqtt_pass))
+    {
       String message_topic = "ledSign/" + LEDSIGNID + "/message";
       client.subscribe(message_topic.c_str());
       client.subscribe("ledSign/message");
@@ -530,9 +554,13 @@ void reconnectMQTT()
       Serial.println(" trying again in 1 second");
       delay(1000);
       c++;
-      if (c > 5) {
+      if (c > 5)
+      {
         Serial.println("Can't seem to connect? Maybe the server info is wrong?");
-        Serial.print("Server: " ); Serial.print(mqtt_server); Serial.print(":"); Serial.println(mqtt_port);
+        Serial.print("Server: ");
+        Serial.print(mqtt_server);
+        Serial.print(":");
+        Serial.println(mqtt_port);
         Serial.println("Going to reboot just for the fuck of it");
         ESP.restart();
       }
@@ -540,8 +568,8 @@ void reconnectMQTT()
   }
 }
 
-
-void initMQTT() { //reads the stored values
+void initMQTT()
+{ // reads the stored values
   // 0 - mqtt_server 1 - mqtt_port 2 - mqtt_user 3 - mqtt_pass
   // take from myMenuItem
   strcpy(mqtt_server, myMenuItems[0].pdata);
@@ -562,9 +590,11 @@ void initMQTT() { //reads the stored values
   printDateTime();
 }
 
-void setup() {
+void setup()
+{
   Serial.begin(115200);
-  while (!Serial);
+  while (!Serial)
+    ;
   Serial.println("Starting LED Sign Controller. Darke Tech Corp. 2024");
   initSign();
   Serial.println("Checking WiFi Connectivity through WiFiManager_Lite");
@@ -582,20 +612,23 @@ void setup() {
   Serial.println("Starting main loop");
 }
 
-
-
-void loop() {
-  ESP_WiFiManager->run(); //manages the wifi connections
-  if (WiFi.status() == WL_CONNECTED) {
-    if (!ismqttConfigured) {
-      initMQTT(); //also gets/updates time
+void loop()
+{
+  ESP_WiFiManager->run(); // manages the wifi connections
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    if (!ismqttConfigured)
+    {
+      initMQTT(); // also gets/updates time
       delay(200);
     }
-    smartDelay(1000); //main "online" loop
+    smartDelay(1000); // main "online" loop
   }
-  else {
+  else
+  {
     showOfflineConnectionDetails();
-    if (ismqttConfigured) {
+    if (ismqttConfigured)
+    {
       Serial.println("ERROR");
       Serial.println("Lost WiFi or other general error. Rebooting");
       Serial.println("BYEEEE");
