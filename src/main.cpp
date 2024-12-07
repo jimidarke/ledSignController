@@ -14,7 +14,7 @@
 // [red,interlock]Monday
 // [green,rotate]
 
-const char *currentVersion = "0.1.1";
+const char *currentVersion = "0.1.4";
 
 char wifi_ssid[32] = SIGN_DEFAULT_SSID;
 char wifi_pass[32] = SIGN_DEFAULT_PASS;
@@ -54,6 +54,7 @@ void parsePayload(const char *msg);
 void reconnectMQTT();
 void callback(char *topic, byte *message, unsigned int length);
 unsigned long getUptime();
+void smartDelay(int delay_ms);
 
 #if USING_CUSTOMS_STYLE
 const char NewCustomsStyle[] PROGMEM = "<style>div,input{padding:5px;font-size:1em;}input{width:95%;}body{text-align: center;}"
@@ -204,36 +205,32 @@ void showOfflineConnectionDetails() // displays on the sign the wifi info and su
   // default options
   char color = BB_COL_AUTOCOLOR;
   char position = BB_DP_TOPLINE;
-  char mode = BB_DM_ROTATE;
+  char mode = BB_DM_HOLD;
   char special = BB_SDM_TWINKLE;
   String msg;
-  msg = "You are offline";
+  msg = "*Offline*";
   bb.WritePriorityTextFile(msg.c_str(), BB_COL_RED, position, BB_DM_EXPLODE, special);
-  delay(1500);
+  smartDelay(5000);
   bb.CancelPriorityTextFile();
-  msg = "Connect to WiFi:";
+  msg = "Connect to:";
   bb.WritePriorityTextFile(msg.c_str(), BB_COL_GREEN, position, BB_DM_HOLD, special);
-  delay(1500);
+  smartDelay(1500);
   bb.CancelPriorityTextFile();
   msg = "LEDSign";
   bb.WritePriorityTextFile(msg.c_str(), BB_COL_ORANGE, position, mode, special);
-  delay(1500);
+  smartDelay(5000);
   bb.CancelPriorityTextFile();
   msg = "Password";
   bb.WritePriorityTextFile(msg.c_str(), BB_COL_GREEN, position, mode, special);
-  delay(1500);
+  smartDelay(1500);
   bb.CancelPriorityTextFile();
   msg = "ledsign0";
   bb.WritePriorityTextFile(msg.c_str(), BB_COL_ORANGE, position, mode, special);
-  delay(1500);
+  smartDelay(5000);
   bb.CancelPriorityTextFile();
-  msg = "Have a great day";
-  bb.WritePriorityTextFile(msg.c_str(), BB_COL_RAINBOW1, position, mode, special);
-  delay(1500);
-  bb.CancelPriorityTextFile();
-  msg = "Thank you";
+  msg = "";
   bb.WritePriorityTextFile(msg.c_str(), color, position, BB_DM_SPECIAL, BB_SDM_THANKYOU);
-  delay(1500);
+  smartDelay(3500);
 }
 
 String getFriendlyDateTime()
@@ -303,18 +300,19 @@ void smartDelay(int delay_ms)
     {
       reconnectMQTT();
       client.loop(); // callbacks will check for messages and config updates
+      // turn off clock if times up
+      if (millis() - clockStart > SIGN_SHOW_CLOCK_DELAY_MS && clockStart > 0 && !inPriority)
+      { // hide after ten seconds
+        bb.CancelPriorityTextFile();
+      }
+      if (millis() - lastUpdate > 60000)
+      { // send telemetry and show clock every minute-ish
+        sendSensorUpdates();
+        showClock();
+        lastUpdate = millis();
+      }
     }
-    // turn off clock if times up
-    if (millis() - clockStart > SIGN_SHOW_CLOCK_DELAY_MS && clockStart > 0 && !inPriority)
-    { // hide after ten seconds
-      bb.CancelPriorityTextFile();
-    }
-    if (millis() - lastUpdate > 60000)
-    { // send telemetry and show clock every minute-ish
-      sendSensorUpdates();
-      showClock();
-      lastUpdate = millis();
-    }
+    ESP_WiFiManager->run(); // manages the wifi connections
     delay(1);
   }
 }
@@ -717,9 +715,9 @@ void loop()
     {
       checkForUpdates(currentVersion, otaVersionURL, otaFirmwareURL); // check for updates
       initMQTT();                                                     // also gets/updates time
-      delay(200);
+      delay(100);
     }
-    smartDelay(1000); // main "online" loop
+    smartDelay(100); // main "online" loop
   }
   else
   {
