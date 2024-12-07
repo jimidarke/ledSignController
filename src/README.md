@@ -12,3 +12,48 @@ trivia 1
 news 5
 jokes 5
 facts 5
+
+
+Options List for LED Sign 
+amber
+automode
+balloon
+bomb
+clock
+comprotate
+cyclecolors
+dontdrinkanddrive
+explode
+fireworks
+fish
+flash
+green
+hold
+interlock
+newsflash
+nosmoking
+red
+rolldown
+rollin
+rollleft
+rollout
+rollright
+rollup
+rotate
+scroll
+slide
+slots
+snow
+sparkle
+spray
+starburst
+switch
+thankyou
+twinkle
+welcome
+wipedown
+wipein
+wipeleft
+wipeout
+wiperight
+wipeup

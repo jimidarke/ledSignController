@@ -124,7 +124,7 @@
 #define SCAN_WIFI_NETWORKS                  true
 
 // To be able to manually input SSID, not from a scanned SSID lists
-#define MANUAL_SSID_INPUT_ALLOWED           false //true
+#define MANUAL_SSID_INPUT_ALLOWED           true
 
 // From 2-15
   #define MAX_SSID_IN_LIST                  8

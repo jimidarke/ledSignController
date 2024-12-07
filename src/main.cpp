@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include "OTAupdate.h" // OTA Updates call checkForUpdates()
 
 // examples of strings with options
 // [red]as of 10/28/12 07:38pm
@@ -12,6 +13,8 @@
 // [green, rotate]green
 // [red,interlock]Monday
 // [green,rotate]
+
+const char *currentVersion = "0.1.1";
 
 char wifi_ssid[32] = SIGN_DEFAULT_SSID;
 char wifi_pass[32] = SIGN_DEFAULT_PASS;
@@ -27,14 +30,18 @@ const char *tz = SIGN_TIMEZONE_POSIX;
 // NTP server
 const char *ntpServer = "pool.ntp.org";
 
+// OTA Update Server details
+const char *otaVersionURL = "http://docker02.darketech.ca:8003/version.txt"; // 0.0.1
+const char *otaFirmwareURL = "http://docker02.darketech.ca:8003/firmware.bin";
+
 WiFiClient espClient;
 PubSubClient client(espClient);
 ESP_WiFiManager_Lite *ESP_WiFiManager;
-BETABRITE bb(1, 16, 17); // RX, TX
+BETABRITE bb(1, 16, 17); // SerialID (always 1), RX pin, TX pin
 
 bool inPriority = false;
-bool alreadyShowingOfflineMessage = false;
 bool ismqttConfigured = false;
+
 String LEDSIGNID; // will update later using MAC address
 
 char bbTextFileName = 'A';
@@ -44,7 +51,6 @@ unsigned long clockStart = 0;
 
 // declare functions before using them
 void parsePayload(const char *msg);
-void connectWiFi();
 void reconnectMQTT();
 void callback(char *topic, byte *message, unsigned int length);
 unsigned long getUptime();
@@ -66,17 +72,6 @@ void sendSensorUpdates()
   client.publish(("ledSign/" + LEDSIGNID + "/uptime").c_str(), String(millis() / 1000).c_str(), true);
   Serial.print("RSSI: ");
   Serial.println(WiFi.RSSI());
-}
-
-// Callback to handle incoming MQTT messages
-void callback(char *topic, byte *message, unsigned int length)
-{
-  String messageTemp;
-  for (int i = 0; i < length; i++)
-  {
-    messageTemp += (char)message[i];
-  }
-  parsePayload(messageTemp.c_str());
 }
 
 void printDateTime(bool UseMilitaryTime = false)
@@ -134,21 +129,111 @@ void printDateTime(bool UseMilitaryTime = false)
   Serial.println();
 }
 
+String generateRandomString(int length)
+{
+  const char characters[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const int charactersLength = sizeof(characters) - 1;
+  String result = "";
+  for (int i = 0; i < length; i++)
+  {
+    result += characters[random(0, charactersLength)];
+  }
+  return result;
+}
+
+void showAllSignOptions() // runs through all color, special, mode, and position options for the sign
+{
+  // Define the four lists
+  const char colors[] = {
+      BB_COL_AMBER, BB_COL_AUTOCOLOR, BB_COL_BROWN, BB_COL_COLORMIX,
+      BB_COL_DIMGREEN, BB_COL_DIMRED, BB_COL_GREEN, BB_COL_ORANGE,
+      BB_COL_RAINBOW1, BB_COL_RAINBOW2, BB_COL_RED, BB_COL_YELLOW};
+
+  const char specials[] = {
+      BB_SDM_TWINKLE, BB_SDM_SPARKLE, BB_SDM_SNOW, BB_SDM_INTERLOCK,
+      BB_SDM_SWITCH, BB_SDM_SLIDE, BB_SDM_SPRAY, BB_SDM_STARBURST,
+      BB_SDM_WELCOME, BB_SDM_SLOTS, BB_SDM_NEWSFLASH, BB_SDM_TRUMPET,
+      BB_SDM_CYCLECOLORS, BB_SDM_THANKYOU, BB_SDM_NOSMOKING,
+      BB_SDM_DONTDRINKANDDRIVE, BB_SDM_FISHIMAL, BB_SDM_FIREWORKS,
+      BB_SDM_TURBALLOON, BB_SDM_BOMB};
+
+  const char modes[] = {
+      BB_DM_ROTATE, BB_DM_HOLD, BB_DM_FLASH, BB_DM_ROLLUP,
+      BB_DM_ROLLDOWN, BB_DM_ROLLLEFT, BB_DM_ROLLRIGHT, BB_DM_WIPEUP,
+      BB_DM_WIPEDOWN, BB_DM_WIPELEFT, BB_DM_WIPERIGHT, BB_DM_SCROLL,
+      BB_DM_SPECIAL, BB_DM_AUTOMODE, BB_DM_ROLLIN, BB_DM_ROLLOUT,
+      BB_DM_WIPEIN, BB_DM_WIPEOUT, BB_DM_COMPROTATE, BB_DM_EXPLODE,
+      BB_DM_CLOCK};
+
+  const char positions[] = {
+      BB_DP_MIDLINE, BB_DP_TOPLINE, BB_DP_BOTLINE,
+      BB_DP_FILL, BB_DP_LEFT, BB_DP_RIGHT};
+
+  // default options
+  char default_color = BB_COL_AUTOCOLOR;
+  char default_position = BB_DP_TOPLINE;
+  char default_mode = BB_DM_ROTATE;
+  char default_special = BB_SDM_TWINKLE;
+
+  // Iterate Specials first, then iterate through the rest
+  for (int i = 0; i < sizeof(specials) / sizeof(specials[0]); i++)
+  {
+    char special = specials[i];
+    String randomMsg = generateRandomString(4);
+    Serial.print(special);
+    Serial.print(": ");
+    Serial.println(randomMsg);
+    bb.CancelPriorityTextFile();
+    bb.WritePriorityTextFile(randomMsg.c_str(), default_color, default_position, default_mode, special);
+    // smartDelay(15000); // 15 seconds
+  }
+}
+
 void showOfflineConnectionDetails() // displays on the sign the wifi info and such when its offline
 {
-  if (!alreadyShowingOfflineMessage)
-  {
-    // default options
-    char color = BB_COL_AUTOCOLOR;
-    char position = BB_DP_TOPLINE;
-    char mode = BB_DM_ROTATE;
-    char special = BB_SDM_TWINKLE;
-    String msg = "Connect to WiFi LEDSign password ledsign0 then access http://192.168.50.1 to configure sign";
-    bb.CancelPriorityTextFile();
-    bb.WritePriorityTextFile(msg.c_str(), color, position, mode, special);
-    Serial.println("Displaying Offline Message");
-    alreadyShowingOfflineMessage = true;
-  }
+  bb.CancelPriorityTextFile(); // turns off init screens. blocking.
+  /*
+  You are offline
+  Connect to WiFi
+  LEDSign
+  Password
+  ledsign0
+  Have a great day
+  [thank you]
+  */
+  // default options
+  char color = BB_COL_AUTOCOLOR;
+  char position = BB_DP_TOPLINE;
+  char mode = BB_DM_ROTATE;
+  char special = BB_SDM_TWINKLE;
+  String msg;
+  msg = "You are offline";
+  bb.WritePriorityTextFile(msg.c_str(), BB_COL_RED, position, BB_DM_EXPLODE, special);
+  delay(1500);
+  bb.CancelPriorityTextFile();
+  msg = "Connect to WiFi:";
+  bb.WritePriorityTextFile(msg.c_str(), BB_COL_GREEN, position, BB_DM_HOLD, special);
+  delay(1500);
+  bb.CancelPriorityTextFile();
+  msg = "LEDSign";
+  bb.WritePriorityTextFile(msg.c_str(), BB_COL_ORANGE, position, mode, special);
+  delay(1500);
+  bb.CancelPriorityTextFile();
+  msg = "Password";
+  bb.WritePriorityTextFile(msg.c_str(), BB_COL_GREEN, position, mode, special);
+  delay(1500);
+  bb.CancelPriorityTextFile();
+  msg = "ledsign0";
+  bb.WritePriorityTextFile(msg.c_str(), BB_COL_ORANGE, position, mode, special);
+  delay(1500);
+  bb.CancelPriorityTextFile();
+  msg = "Have a great day";
+  bb.WritePriorityTextFile(msg.c_str(), BB_COL_RAINBOW1, position, mode, special);
+  delay(1500);
+  bb.CancelPriorityTextFile();
+  msg = "Thank you";
+  bb.WritePriorityTextFile(msg.c_str(), color, position, BB_DM_SPECIAL, BB_SDM_THANKYOU);
+  delay(1500);
 }
 
 String getFriendlyDateTime()
@@ -568,6 +653,17 @@ void reconnectMQTT()
   }
 }
 
+// Callback to handle incoming MQTT messages
+void callback(char *topic, byte *message, unsigned int length)
+{
+  String messageTemp;
+  for (int i = 0; i < length; i++)
+  {
+    messageTemp += (char)message[i];
+  }
+  parsePayload(messageTemp.c_str());
+}
+
 void initMQTT()
 { // reads the stored values
   // 0 - mqtt_server 1 - mqtt_port 2 - mqtt_user 3 - mqtt_pass
@@ -619,7 +715,8 @@ void loop()
   {
     if (!ismqttConfigured)
     {
-      initMQTT(); // also gets/updates time
+      checkForUpdates(currentVersion, otaVersionURL, otaFirmwareURL); // check for updates
+      initMQTT();                                                     // also gets/updates time
       delay(200);
     }
     smartDelay(1000); // main "online" loop
@@ -627,12 +724,5 @@ void loop()
   else
   {
     showOfflineConnectionDetails();
-    if (ismqttConfigured)
-    {
-      Serial.println("ERROR");
-      Serial.println("Lost WiFi or other general error. Rebooting");
-      Serial.println("BYEEEE");
-      ESP.restart();
-    }
   }
 }
