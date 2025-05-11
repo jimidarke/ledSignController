@@ -68,13 +68,15 @@ char MQTT_Server [MAX_MQTT_SERVER_LEN + 1]    = "mqtt";
 char MQTT_Port   [MAX_MQTT_PORT_LEN + 1]      = "1883";
 char MQTT_User   [MAX_MQTT_SERVER_LEN + 1]    = "";
 char MQTT_Pass   [MAX_MQTT_SERVER_LEN + 1]    = "";
+char TZ_POSIX    [MAX_MQTT_SERVER_LEN + 1]    = "MST7MDT,M3.2.0/2,M11.1.0/2";
 
 MenuItem myMenuItems [] =
 {
   { "mqt", "MQTT Server",   MQTT_Server,    MAX_MQTT_SERVER_LEN },
   { "mqp", "MQTT Port",     MQTT_Port,      MAX_MQTT_PORT_LEN   },
   { "mqu", "MQTT User",     MQTT_User,      MAX_MQTT_SERVER_LEN   },
-  { "mqd", "MQTT Pass",     MQTT_Pass,      MAX_MQTT_SERVER_LEN   }
+  { "mqd", "MQTT Pass",     MQTT_Pass,      MAX_MQTT_SERVER_LEN   },
+  { "tzp", "TZ Posix",      TZ_POSIX,       MAX_MQTT_SERVER_LEN   }
 };
 
 uint16_t NUM_MENU_ITEMS = sizeof(myMenuItems) / sizeof(MenuItem);  //MenuItemSize;

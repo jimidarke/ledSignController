@@ -14,7 +14,7 @@
 // [red,interlock]Monday
 // [green,rotate]
 
-const char *currentVersion = "0.1.4";
+const char *currentVersion = "0.0.6";
 
 char wifi_ssid[32] = SIGN_DEFAULT_SSID;
 char wifi_pass[32] = SIGN_DEFAULT_PASS;
@@ -34,6 +34,21 @@ const char *ntpServer = "pool.ntp.org";
 const char *otaVersionURL = "http://docker02.darketech.ca:8003/version.txt"; // 0.0.1
 const char *otaFirmwareURL = "http://docker02.darketech.ca:8003/firmware.bin";
 
+const char *signOptions[] = {
+  "Clock",
+  "Weather",
+  "Jokes",
+  "News",
+  "Sports",
+  "Trivia",
+  "Schedule",
+  "Status",
+  "Alerts",
+  "Messages",
+  "Settings",
+  "About"
+}; //iterate through this in the main loop
+
 WiFiClient espClient;
 PubSubClient client(espClient);
 ESP_WiFiManager_Lite *ESP_WiFiManager;
@@ -47,7 +62,14 @@ String LEDSIGNID; // will update later using MAC address
 char bbTextFileName = 'A';
 int numFiles = sign_max_files; // replace this
 unsigned long lastUpdate = 0;
-unsigned long clockStart = 0;
+unsigned long nextSignAt = 0;
+
+int jokenum = 0;
+int newsnum = 0;
+int sportnum = 0;
+int trivianum = 0;
+int schednum = 0;
+int statusnum = 0;
 
 // declare functions before using them
 void parsePayload(const char *msg);
@@ -166,28 +188,27 @@ void showAllSignOptions() // runs through all color, special, mode, and position
       BB_DM_WIPEIN, BB_DM_WIPEOUT, BB_DM_COMPROTATE, BB_DM_EXPLODE,
       BB_DM_CLOCK};
 
-  const char positions[] = {
-      BB_DP_MIDLINE, BB_DP_TOPLINE, BB_DP_BOTLINE,
-      BB_DP_FILL, BB_DP_LEFT, BB_DP_RIGHT};
+  const char positions[] = {BB_DP_MIDLINE, BB_DP_TOPLINE, BB_DP_BOTLINE, BB_DP_FILL, BB_DP_LEFT, BB_DP_RIGHT};
 
   // default options
   char default_color = BB_COL_AUTOCOLOR;
   char default_position = BB_DP_TOPLINE;
   char default_mode = BB_DM_ROTATE;
   char default_special = BB_SDM_TWINKLE;
-
+  // toShowClock = false;
   // Iterate Specials first, then iterate through the rest
   for (int i = 0; i < sizeof(specials) / sizeof(specials[0]); i++)
   {
     char special = specials[i];
-    String randomMsg = generateRandomString(4);
+    String randomMsg = String(i) + generateRandomString(4);
     Serial.print(special);
     Serial.print(": ");
     Serial.println(randomMsg);
     bb.CancelPriorityTextFile();
-    bb.WritePriorityTextFile(randomMsg.c_str(), default_color, default_position, default_mode, special);
-    // smartDelay(15000); // 15 seconds
+    bb.WritePriorityTextFile(randomMsg.c_str(), BB_COL_RED, default_position, BB_DM_SPECIAL, special);
+    smartDelay(10000); // 10 seconds
   }
+  // toShowClock = true;
 }
 
 void showOfflineConnectionDetails() // displays on the sign the wifi info and such when its offline
@@ -263,7 +284,7 @@ void showClock()
   char position = SIGN_CLOCK_POSITION;
   char mode = SIGN_CLOCK_MODE;
   char special = SIGN_CLOCK_SPECIAL;
-  if (!inPriority)
+  if (!inPriority && clockStart == 0)
   {
     bb.CancelPriorityTextFile();
     bb.WritePriorityTextFile(dtime.c_str(), color, position, mode, special);
@@ -285,7 +306,9 @@ void initSign()
   bb.SetMemoryConfiguration(bbTextFileName, numFiles);
   delay(500);
   Serial.println("Sending Default Message");
-  bb.WritePriorityTextFile(SIGN_INIT_STRING, SIGN_INIT_COLOUR, SIGN_INIT_POSITION, SIGN_INIT_MODE, SIGN_INIT_SPECIAL);
+  // msg = SIGN_INIT_STRING + currentVersion;
+  String msg = String(SIGN_INIT_STRING) + " " + currentVersion;
+  bb.WritePriorityTextFile(msg.c_str(), SIGN_INIT_COLOUR, SIGN_INIT_POSITION, SIGN_INIT_MODE, SIGN_INIT_SPECIAL);
   inPriority = false;
   clockStart = 0;
 }
@@ -304,11 +327,12 @@ void smartDelay(int delay_ms)
       if (millis() - clockStart > SIGN_SHOW_CLOCK_DELAY_MS && clockStart > 0 && !inPriority)
       { // hide after ten seconds
         bb.CancelPriorityTextFile();
+        clockStart = 0;
       }
       if (millis() - lastUpdate > 60000)
       { // send telemetry and show clock every minute-ish
         sendSensorUpdates();
-        showClock();
+        // showClock();
         lastUpdate = millis();
       }
     }
@@ -336,6 +360,12 @@ void parsePayload(const char *msg)
     Serial.println("UGHhh Imm Dying DIEING");
     ESP_WiFiManager->clearConfigData();
     ESP_WiFiManager->resetAndEnterConfigPortal();
+  }
+
+  if (msg[0] == '?') 
+  { // show all options
+    showAllSignOptions();
+    return;
   }
 
   // default options
@@ -637,16 +667,6 @@ void reconnectMQTT()
       Serial.println(" trying again in 1 second");
       delay(1000);
       c++;
-      if (c > 5)
-      {
-        Serial.println("Can't seem to connect? Maybe the server info is wrong?");
-        Serial.print("Server: ");
-        Serial.print(mqtt_server);
-        Serial.print(":");
-        Serial.println(mqtt_port);
-        Serial.println("Going to reboot just for the fuck of it");
-        ESP.restart();
-      }
     }
   }
 }
@@ -677,8 +697,8 @@ void initMQTT()
   Serial.println(mqtt_port);
   client.setServer(mqtt_server, mqtt_port);
   client.setCallback(callback);
-  ismqttConfigured = true;
   reconnectMQTT();
+  ismqttConfigured = true;
   Serial.println("Getting Date Time");
   configTzTime(tz, ntpServer);
   printDateTime();
@@ -711,13 +731,21 @@ void loop()
   ESP_WiFiManager->run(); // manages the wifi connections
   if (WiFi.status() == WL_CONNECTED)
   {
-    if (!ismqttConfigured)
+    if (!ismqttConfigured)                                            // perform initial setup once online
     {
       checkForUpdates(currentVersion, otaVersionURL, otaFirmwareURL); // check for updates
       initMQTT();                                                     // also gets/updates time
-      delay(100);
+      delay(50);
     }
-    smartDelay(100); // main "online" loop
+    else {
+      client.loop();                                                  // callbacks will check for messages and config updates
+      if (millis() - lastUpdate > 60000)
+      { // send telemetry and show clock every minute-ish
+        sendSensorUpdates();
+        // showClock();
+        lastUpdate = millis();
+      }
+    }
   }
   else
   {
