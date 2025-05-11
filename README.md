@@ -9,12 +9,13 @@ An ESP32/ESP8266-based controller for BetaBrite LED signs that uses MQTT for rem
 - Control BetaBrite LED signs over a serial connection
 - Multiple display modes, colors, and animation effects
 - WiFi configuration portal for easy network setup
-- MQTT control with multiple message formats
+- MQTT control with JSON message format
+- REST API with Basic Authentication for direct HTTP control
 - Home Assistant auto-discovery with multiple entity types
 - OTA firmware updates
 - Clock display with automatic timezone handling
 - Configurable message queue and priority messages
-- JSON and simple text message formats
+- JSON message format with extensive options
 - Customizable display effects and animations
 
 ## Hardware Requirements
@@ -52,11 +53,13 @@ The web configuration portal allows you to set:
 - MQTT username and password
 - Timezone (in POSIX format)
 
-## MQTT Control
+## Control Options
 
-The LED sign accepts commands through MQTT topics and can use both simple text formats and JSON.
+### MQTT Control
 
-### MQTT Topics
+The LED sign accepts commands through MQTT topics using JSON format.
+
+#### MQTT Topics
 
 - `ledSign/[DEVICE_ID]/message` - Send JSON-formatted messages
 - `ledSign/[DEVICE_ID]/json` - Send JSON-formatted commands (same as above, for compatibility)
@@ -66,6 +69,61 @@ The LED sign accepts commands through MQTT topics and can use both simple text f
 Where `[DEVICE_ID]` is the unique identifier for your sign (based on MAC address).
 
 **Note:** All messages must be in JSON format. Legacy text format is no longer supported.
+
+### REST API
+
+The LED sign can also be controlled via a RESTful API with HTTP Basic Authentication.
+
+#### API Endpoints
+
+- `GET /api/info` - Returns device information (status, version, etc.)
+- `POST /api/message` - Send a message to the sign (using the same JSON format as MQTT)
+
+#### Authentication
+
+The API uses HTTP Basic Authentication with these default credentials:
+- **Username**: `admin`
+- **Password**: `ledsign`
+
+You can change these credentials in the `defines.h` file by modifying `REST_API_USERNAME` and `REST_API_PASSWORD`.
+
+#### API Parameters
+
+The REST API accepts the same JSON message format as the MQTT interface (see Message Format section for details):
+
+| Parameter | Description | Possible Values |
+|-----------|-------------|----------------|
+| `type`    | Message type | `normal`, `priority`, `clear`, `reset`, `options` |
+| `text`    | The message to display | Any text string |
+| `color`   | Text color   | `red`, `green`, `amber`, etc. (see Colors section) |
+| `mode`    | Display mode | `rotate`, `hold`, `flash`, etc. (see Display Modes section) |
+| `position`| Text position | `topline`, `midline`, `botline`, etc. (see Text Positions section) |
+| `special` | Special effect | `twinkle`, `snow`, `interlock`, etc. (see Special Effects section) |
+
+#### Examples
+
+**Get device information:**
+```
+curl -X GET http://sign-ip/api/info -u admin:ledsign
+```
+
+**Send a message to the sign:**
+```
+curl -X POST http://sign-ip/api/message \
+  -u admin:ledsign \
+  -H "Content-Type: application/json" \
+  -d '{"type":"normal","text":"Hello from API","color":"green","mode":"rotate"}'
+```
+
+**Clear the sign:**
+```
+curl -X POST http://sign-ip/api/message \
+  -u admin:ledsign \
+  -H "Content-Type: application/json" \
+  -d '{"type":"clear"}'
+```
+
+The JSON payload format is identical to the MQTT message format documented in the Message Format section below.
 
 ### Status Topics (published by the controller)
 
@@ -79,9 +137,10 @@ Where `[DEVICE_ID]` is the unique identifier for your sign (based on MAC address
 
 ### Message Format
 
-The LED sign accepts commands in JSON format only.
+The LED sign accepts commands in JSON format only, which can be sent via both MQTT and REST API.
 
-General structure:
+#### JSON Message Structure
+
 ```json
 {
   "type": "normal|priority|clear|reset|options",
@@ -93,7 +152,9 @@ General structure:
 }
 ```
 
-Example normal message:
+#### Common Message Examples
+
+**Normal message:**
 ```json
 {
   "type": "normal",
@@ -103,7 +164,7 @@ Example normal message:
 }
 ```
 
-Example priority message:
+**Priority message:**
 ```json
 {
   "type": "priority",
@@ -114,10 +175,22 @@ Example priority message:
 }
 ```
 
-Clear all messages:
+**Clear all messages:**
 ```json
 {
   "type": "clear"
+}
+```
+
+**Show temperature with custom formatting:**
+```json
+{
+  "type": "normal",
+  "text": "Temperature: 21°C",
+  "color": "green",
+  "position": "midline",
+  "mode": "hold",
+  "special": "twinkle"
 }
 ```
 
@@ -550,12 +623,19 @@ When deploying the LED Sign Controller, consider the following security best pra
 - Change the default AP password (`ledsign0`) during configuration
 - Place the device on a separate IoT network/VLAN when possible
 - Use a strong, unique password for your WiFi network
+- Consider using a firewall to restrict access to the device
 
 ### MQTT Security
 - Enable MQTT authentication and use strong, unique credentials
 - Consider using TLS/SSL for MQTT connections in sensitive environments
 - Restrict MQTT topic access using ACLs on your broker
 - Regularly rotate MQTT passwords
+
+### REST API Security
+- Change the default API credentials (username: `admin`, password: `ledsign`)
+- Avoid exposing the REST API directly to the internet
+- Consider setting up a reverse proxy with HTTPS if remote access is needed
+- Implement IP-based access restrictions if possible in your network
 
 ### Physical Security
 - Place the ESP32 and wiring in an enclosure to prevent tampering
@@ -571,6 +651,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Version History
 
+- **0.0.7** - Added REST API parameter documentation and improved examples
 - **0.0.6** - Added Home Assistant MQTT auto-discovery
 - **0.0.5** - Added priority message handling
 - **0.0.4** - Implemented JSON message format

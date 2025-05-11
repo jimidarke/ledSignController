@@ -6,6 +6,7 @@
 #include "OTAupdate.h" // OTA Updates call checkForUpdates()
 #include "MessageParser.h"
 #include "MQTTManager.h"
+#include "RestApiManager.h"
 
 // JSON format examples:
 // {"type":"normal", "text":"Hello World", "color":"red", "mode":"rotate"}
@@ -15,7 +16,7 @@
 // {"type":"options"}
 // {"type":"normal", "text":"Temperature: 21°C", "color":"green", "position":"midline", "mode":"hold"}
 
-const char *currentVersion = "0.0.6";
+const char *currentVersion = "0.0.7";
 
 char wifi_ssid[32] = SIGN_DEFAULT_SSID;
 char wifi_pass[32] = SIGN_DEFAULT_PASS;
@@ -54,10 +55,12 @@ WiFiClient espClient;
 PubSubClient client(espClient);
 MQTTManager* mqttManager;
 ESP_WiFiManager_Lite *ESP_WiFiManager;
+RestApiManager* restApiManager;
 BETABRITE bb(1, 16, 17); // SerialID (always 1), RX pin, TX pin
 
 bool inPriority = false;
 bool ismqttConfigured = false;
+bool isRestApiConfigured = false;
 unsigned long clockStart = 0; // Keep track of when the clock started showing
 
 String LEDSIGNID; // will update later using MAC address
@@ -76,12 +79,15 @@ int statusnum = 0;
 
 // declare functions before using them
 void parsePayload(const char *msg);
+void processMessage(const char *msg); // Common handler for MQTT and REST API
 void reconnectMQTT();
 void callback(char *topic, byte *message, unsigned int length);
+void restApiMessageHandler(const char *msg); // REST API message callback
 unsigned long getUptime();
 void smartDelay(int delay_ms);
 void cleanup();
 void printHomeAssistantDetails();
+void initRestApi(); // Initialize REST API
 
 #if USING_CUSTOMS_STYLE
 const char NewCustomsStyle[] PROGMEM = "<style>div,input{padding:5px;font-size:1em;}input{width:95%;}body{text-align: center;}"
@@ -506,6 +512,31 @@ int getRSSI()
   return WiFi.RSSI();
 }
 
+// Common message handler for both MQTT and REST API
+void processMessage(const char *msg)
+{
+  // Log the message
+  Serial.print("Processing message: ");
+  if (strlen(msg) > 100) {
+    char truncated[101];
+    strncpy(truncated, msg, 100);
+    truncated[100] = '\0';
+    Serial.print(truncated);
+    Serial.println("...[truncated]");
+  } else {
+    Serial.println(msg);
+  }
+  
+  // Process the message
+  parsePayload(msg);
+}
+
+// REST API message handler
+void restApiMessageHandler(const char *msg)
+{
+  processMessage(msg);
+}
+
 // Callback to handle incoming MQTT messages
 void callback(char *topic, byte *message, unsigned int length)
 {
@@ -514,23 +545,11 @@ void callback(char *topic, byte *message, unsigned int length)
   memcpy(messageBuffer, message, length);
   messageBuffer[length] = '\0';
   
-  Serial.print("Message received on topic: ");
+  Serial.print("Message received on MQTT topic: ");
   Serial.println(topic);
   
-  // Log first part of the message (up to 100 chars)
-  if (length > 100) {
-    Serial.print("Message (truncated): ");
-    char truncated[101];
-    memcpy(truncated, message, 100);
-    truncated[100] = '\0';
-    Serial.println(truncated);
-  } else {
-    Serial.print("Message: ");
-    Serial.println(messageBuffer);
-  }
-  
-  // Process the message
-  parsePayload(messageBuffer);
+  // Process the message using the common handler
+  processMessage(messageBuffer);
 }
 
 void initMQTT()
@@ -621,6 +640,43 @@ void printHomeAssistantDetails() {
   Serial.println("--------------------------------------");
 }
 
+// Initialize the REST API
+void initRestApi() {
+  if (REST_API_ENABLED && WiFi.status() == WL_CONNECTED) {
+    Serial.println("Setting up REST API...");
+    
+    // Create REST API manager if not already created
+    if (!restApiManager) {
+      restApiManager = new RestApiManager();
+    }
+    
+    // Initialize with default or configured credentials
+    restApiManager->begin(REST_API_USERNAME, REST_API_PASSWORD);
+    
+    // Set the device ID
+    restApiManager->setDeviceId(LEDSIGNID.c_str());
+    
+    // Set message handler callback
+    restApiManager->setMessageHandler(restApiMessageHandler);
+    
+    isRestApiConfigured = true;
+    Serial.println("REST API initialized successfully");
+    
+    // Print API usage information
+    Serial.println("\nREST API Usage:");
+    Serial.println("--------------------------------------");
+    Serial.println("Base URL: http://" + WiFi.localIP().toString() + "/api");
+    Serial.println("Authentication: Basic (Username: " + String(REST_API_USERNAME) + ")");
+    Serial.println("\nEndpoints:");
+    Serial.println("- GET /api/info - Returns device information");
+    Serial.println("- POST /api/message - Send message to sign (JSON format)");
+    Serial.println("--------------------------------------");
+    Serial.println("Example POST to /api/message:");
+    Serial.println("{\"type\":\"normal\",\"text\":\"Hello World\",\"color\":\"red\",\"mode\":\"rotate\"}");
+    Serial.println("--------------------------------------");
+  }
+}
+
 // Clean up resources when shutting down or resetting
 void cleanup() {
   if (mqttManager) {
@@ -634,11 +690,19 @@ void cleanup() {
     mqttManager = nullptr;
   }
   
+  if (restApiManager) {
+    // Stop and clean up REST API manager
+    restApiManager->stop();
+    delete restApiManager;
+    restApiManager = nullptr;
+  }
+  
   if (ESP_WiFiManager) {
     // WiFi manager cleanup handled by the library
   }
   
   ismqttConfigured = false;
+  isRestApiConfigured = false;
 }
 
 void setup()
@@ -647,12 +711,12 @@ void setup()
   Serial.begin(115200);
   while (!Serial && millis() < 5000) // Wait but timeout after 5 seconds
     delay(10);
-    
-  Serial.println("\n\n=============================================");
+      Serial.println("\n\n=============================================");
   Serial.println("Starting LED Sign Controller. Darke Tech Corp. 2024");
   Serial.print("Version: ");
   Serial.println(currentVersion);
   Serial.println("Home Assistant MQTT Discovery: " + String(HASS_DISCOVERY_ENABLED ? "Enabled" : "Disabled"));
+  Serial.println("REST API: " + String(REST_API_ENABLED ? "Enabled" : "Disabled"));
   Serial.println("=============================================");
   
   // Initialize the sign
@@ -675,9 +739,11 @@ void setup()
 
   // Start WiFi Manager
   ESP_WiFiManager->begin("LEDSign");
-  
-  // Initialize MQTT Manager (but don't connect yet - will connect in loop)
+    // Initialize MQTT Manager (but don't connect yet - will connect in loop)
   mqttManager = new MQTTManager(&espClient);
+  
+  // Initialize REST API Manager (will be configured after WiFi connects)
+  restApiManager = new RestApiManager();
   
   // Set random seed
   randomSeed(analogRead(0));
@@ -693,10 +759,18 @@ void loop()
   // Check WiFi connection
   if (WiFi.status() == WL_CONNECTED)
   {
-    if (!ismqttConfigured) {
+    if (!ismqttConfigured || !isRestApiConfigured) {
       // First-time setup when connected
       checkForUpdates(currentVersion, otaVersionURL, otaFirmwareURL);
-      initMQTT();
+      
+      if (!ismqttConfigured) {
+        initMQTT();
+      }
+      
+      if (REST_API_ENABLED && !isRestApiConfigured) {
+        initRestApi();
+      }
+      
       delay(50);
     }
     else {

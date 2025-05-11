@@ -189,4 +189,9 @@
 #define HASS_DISCOVERY_ENABLED    true
 #define HASS_NODE_ID              "ledsign"  // Will be combined with device ID
 
+// REST API configuration
+#define REST_API_ENABLED          true
+#define REST_API_USERNAME         "admin"
+#define REST_API_PASSWORD         "ledsign"
+
 #endif      //defines_h
