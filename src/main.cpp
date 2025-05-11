@@ -1,18 +1,19 @@
-
 #include "defines.h"
 #include <SPI.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include "OTAupdate.h" // OTA Updates call checkForUpdates()
+#include "MessageParser.h"
+#include "MQTTManager.h"
 
-// examples of strings with options
-// [red]as of 10/28/12 07:38pm
-// [snow,green]Some Text here, it is green with snow effect
-// [amber,rotate]I'm amber and I rotate
-// [green, rotate]green
-// [red,interlock]Monday
-// [green,rotate]
+// JSON format examples:
+// {"type":"normal", "text":"Hello World", "color":"red", "mode":"rotate"}
+// {"type":"priority", "text":"Alert!", "color":"red", "mode":"flash", "special":"starburst"}
+// {"type":"clear"}
+// {"type":"reset"}
+// {"type":"options"}
+// {"type":"normal", "text":"Temperature: 21°C", "color":"green", "position":"midline", "mode":"hold"}
 
 const char *currentVersion = "0.0.6";
 
@@ -25,7 +26,7 @@ char mqtt_pass[32] = "";
 int sign_max_files = 5; // number of files on the sign (before they get overridden by new ones)
 
 // POSIX time zone string for Mountain Time with DST
-const char *tz = SIGN_TIMEZONE_POSIX;
+char tz[64] = SIGN_TIMEZONE_POSIX;  // Changed from const char* to a char array to allow modification
 
 // NTP server
 const char *ntpServer = "pool.ntp.org";
@@ -51,11 +52,13 @@ const char *signOptions[] = {
 
 WiFiClient espClient;
 PubSubClient client(espClient);
+MQTTManager* mqttManager;
 ESP_WiFiManager_Lite *ESP_WiFiManager;
 BETABRITE bb(1, 16, 17); // SerialID (always 1), RX pin, TX pin
 
 bool inPriority = false;
 bool ismqttConfigured = false;
+unsigned long clockStart = 0; // Keep track of when the clock started showing
 
 String LEDSIGNID; // will update later using MAC address
 
@@ -77,6 +80,8 @@ void reconnectMQTT();
 void callback(char *topic, byte *message, unsigned int length);
 unsigned long getUptime();
 void smartDelay(int delay_ms);
+void cleanup();
+void printHomeAssistantDetails();
 
 #if USING_CUSTOMS_STYLE
 const char NewCustomsStyle[] PROGMEM = "<style>div,input{padding:5px;font-size:1em;}input{width:95%;}body{text-align: center;}"
@@ -85,15 +90,35 @@ const char NewCustomsStyle[] PROGMEM = "<style>div,input{padding:5px;font-size:1
 
 void sendSensorUpdates()
 {
-  if (!ismqttConfigured)
+  if (!ismqttConfigured || !mqttManager->checkConnection())
     return;
-  // RSSI
-  client.publish(("ledSign/" + LEDSIGNID + "/rssi").c_str(), String(WiFi.RSSI()).c_str(), true);
-  // IP Address
-  client.publish(("ledSign/" + LEDSIGNID + "/ip").c_str(), WiFi.localIP().toString().c_str(), true);
-  // Uptime
-  client.publish(("ledSign/" + LEDSIGNID + "/uptime").c_str(), String(millis() / 1000).c_str(), true);
-  Serial.print("RSSI: ");
+    
+  // Create JSON document for telemetry data
+  StaticJsonDocument<256> doc;
+  doc["rssi"] = WiFi.RSSI();
+  doc["ip"] = WiFi.localIP().toString();
+  doc["uptime"] = millis() / 1000;
+  doc["version"] = currentVersion;
+  doc["freeHeap"] = ESP.getFreeHeap();
+  doc["inPriority"] = inPriority;
+  
+  // Serialize to JSON string
+  String jsonStr;
+  serializeJson(doc, jsonStr);
+  
+  // Publish telemetry data as JSON
+  mqttManager->publish(("ledSign/" + LEDSIGNID + "/status").c_str(), jsonStr.c_str(), true);
+  
+  // Also publish individual values for compatibility and Home Assistant
+  mqttManager->publish(("ledSign/" + LEDSIGNID + "/rssi").c_str(), String(WiFi.RSSI()).c_str(), true);
+  mqttManager->publish(("ledSign/" + LEDSIGNID + "/ip").c_str(), WiFi.localIP().toString().c_str(), true);
+  mqttManager->publish(("ledSign/" + LEDSIGNID + "/uptime").c_str(), String(millis() / 1000).c_str(), true);
+  
+  // Publish current sign status for Home Assistant
+  String statusMsg = inPriority ? "Priority message active" : "Normal operation";
+  mqttManager->publish(("ledSign/" + LEDSIGNID + "/state").c_str(), statusMsg.c_str(), true);
+  
+  Serial.print("Telemetry sent - RSSI: ");
   Serial.println(WiFi.RSSI());
 }
 
@@ -316,316 +341,149 @@ void initSign()
 // smart delay to allow background processes to still occur
 void smartDelay(int delay_ms)
 {
-  int stoptime = millis() + delay_ms;
+  unsigned long stoptime = millis() + delay_ms;
+  unsigned long lastYield = millis();
+  
   while (millis() < stoptime)
   {
-    if (ismqttConfigured)
-    {
-      reconnectMQTT();
-      client.loop(); // callbacks will check for messages and config updates
-      // turn off clock if times up
-      if (millis() - clockStart > SIGN_SHOW_CLOCK_DELAY_MS && clockStart > 0 && !inPriority)
-      { // hide after ten seconds
+    // Handle WiFi management
+    ESP_WiFiManager->run();
+    
+    // Handle MQTT if configured
+    if (ismqttConfigured && mqttManager) {
+      mqttManager->loop();
+      
+      // Handle clock display timeout
+      if (millis() - clockStart > SIGN_SHOW_CLOCK_DELAY_MS && clockStart > 0 && !inPriority) {
         bb.CancelPriorityTextFile();
         clockStart = 0;
       }
-      if (millis() - lastUpdate > 60000)
-      { // send telemetry and show clock every minute-ish
+      
+      // Send telemetry periodically
+      if (millis() - lastUpdate > 60000) {
         sendSensorUpdates();
-        // showClock();
         lastUpdate = millis();
       }
     }
-    ESP_WiFiManager->run(); // manages the wifi connections
-    delay(1);
+    
+    // Yield to prevent watchdog trigger - at least every 100ms
+    if (millis() - lastYield > 100) {
+      delay(1);
+      lastYield = millis();
+    }
   }
 }
 
 void parsePayload(const char *msg)
 {
-  // check if first character is # this will clear the sign
-  if (msg[0] == '#')
-  {
-    Serial.println("Clearing Internal Data");
-    clearTextFiles();
-    initSign();
+  // Parse as JSON only
+  String messageStr = String(msg);
+  ParsedMessage parsedMsg = parseJsonMessage(messageStr);
+  
+  if (!parsedMsg.isValid) {
+    Serial.print("JSON parsing error: ");
+    Serial.println(parsedMsg.errorMsg);
+    Serial.println("Message must be in JSON format");
     return;
   }
-
-  if (msg[0] == '^')
-  { // factory reset
-    clearTextFiles();
-    Serial.println("");
-    Serial.println("Clearing All Data and Resetting");
-    Serial.println("UGHhh Imm Dying DIEING");
-    ESP_WiFiManager->clearConfigData();
-    ESP_WiFiManager->resetAndEnterConfigPortal();
-  }
-
-  if (msg[0] == '?') 
-  { // show all options
-    showAllSignOptions();
-    return;
-  }
-
-  // default options
-  char color = BB_COL_AUTOCOLOR;
-  char position = BB_DP_TOPLINE;
-  char mode = BB_DM_ROTATE;
-  char special = BB_SDM_TWINKLE;
-
-  // check if first character is a * to denote a priority message
-  if (msg[0] == '*')
-  {
-    inPriority = true; // global var
-    msg++;
-    Serial.println("### Priority Message ###");
-    Serial.println(msg);
-    bb.CancelPriorityTextFile();
-    bb.WritePriorityTextFile("# # # #", BB_COL_RED, BB_DP_TOPLINE, BB_DM_FLASH, BB_SDM_TWINKLE);
-    smartDelay(2500); // 5 seconds delay to display priority message warning
-    bb.CancelPriorityTextFile();
-    bb.WritePriorityTextFile(msg, color, position, mode, special);
-    smartDelay(25000); // 20 seconds delay to display actual priority message
-    bb.CancelPriorityTextFile();
-    inPriority = false;
-    return;
-  }
-
-  // handle options
-  char *open_delim = strchr(msg, '[');
-  char *close_delim = strchr(msg, ']');
-  if (open_delim == msg && close_delim != NULL && !inPriority)
-  {
-    int options_length = close_delim - open_delim;
-    char options[options_length];
-    strncpy(options, msg + 1, options_length - 1);
-    options[options_length - 1] = '\0';
-    Serial.print("options: ");
-    Serial.println(options);
-    char *option = strtok(options, ",");
-    while (option != NULL)
-    {
-      if (strstr(option, "trumpet") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_TRUMPET;
+  
+  // Process based on message type
+  switch (parsedMsg.type) {    case CLEAR_SIGN:
+      Serial.println("Clearing Internal Data");
+      clearTextFiles();
+      initSign();
+      
+      // Update Home Assistant light state
+      if (ismqttConfigured && mqttManager) {
+        mqttManager->publish(("ledSign/" + LEDSIGNID + "/light_state").c_str(), "{\"state\":\"OFF\"}", true);
+        mqttManager->publish(("ledSign/" + LEDSIGNID + "/state").c_str(), "Sign cleared", true);
       }
-      else if (strstr(option, "red") == option)
-      {
-        color = BB_COL_RED;
+      return;
+      
+    case FACTORY_RESET:
+      clearTextFiles();
+      Serial.println("");
+      Serial.println("Clearing All Data and Resetting");
+      Serial.println("Factory reset requested");
+      ESP_WiFiManager->clearConfigData();
+      ESP_WiFiManager->resetAndEnterConfigPortal();
+      return;
+      
+    case SHOW_OPTIONS:
+      Serial.println("Showing all sign display options");
+      showAllSignOptions();
+      return;
+        case PRIORITY_MESSAGE:
+      inPriority = true; // global var
+      Serial.println("### Priority Message ###");
+      Serial.println(parsedMsg.text);
+      
+      // Publish state update
+      if (ismqttConfigured && mqttManager) {
+        mqttManager->publish(("ledSign/" + LEDSIGNID + "/state").c_str(), 
+                            ("PRIORITY: " + parsedMsg.text).c_str(), true);
       }
-      else if (strstr(option, "amber") == option)
-      {
-        color = BB_COL_AMBER;
+      
+      // Show warning
+      bb.CancelPriorityTextFile();
+      bb.WritePriorityTextFile("# # # #", BB_COL_RED, BB_DP_TOPLINE, BB_DM_FLASH, BB_SDM_TWINKLE);
+      smartDelay(2500); // 2.5 seconds delay to display priority message warning
+      
+      // Show actual message
+      bb.CancelPriorityTextFile();
+      bb.WritePriorityTextFile(parsedMsg.text.c_str(), parsedMsg.color, parsedMsg.position, 
+                             parsedMsg.mode, parsedMsg.special);
+      smartDelay(25000); // 25 seconds delay to display actual priority message
+      
+      // Cancel priority message
+      bb.CancelPriorityTextFile();
+      inPriority = false;
+      
+      // Update state now that priority is over
+      if (ismqttConfigured && mqttManager) {
+        mqttManager->publish(("ledSign/" + LEDSIGNID + "/state").c_str(), "Normal operation", true);
       }
-      else if (strstr(option, "green") == option)
-      {
-        color = BB_COL_GREEN;
+      return;
+        case NORMAL_MESSAGE:
+      // Log message details
+      Serial.println("");
+      Serial.print("Color: ");
+      Serial.print(parsedMsg.color);
+      Serial.print(" Pos: ");
+      Serial.print(parsedMsg.position);
+      Serial.print(" Mode: ");
+      Serial.print(parsedMsg.mode);
+      Serial.print(" Special: ");
+      Serial.print(parsedMsg.special);
+      Serial.print(" File: ");
+      Serial.println(bbTextFileName);
+      Serial.println(parsedMsg.text);
+      
+      // Write message to sign
+      bb.WriteTextFile(bbTextFileName++, parsedMsg.text.c_str(), parsedMsg.color, 
+                     parsedMsg.position, parsedMsg.mode, parsedMsg.special);
+        // Publish the message to the state topic for Home Assistant
+      if (ismqttConfigured && mqttManager) {
+        String truncatedMsg = parsedMsg.text;
+        if (truncatedMsg.length() > 60) {
+          truncatedMsg = truncatedMsg.substring(0, 57) + "...";
+        }
+        mqttManager->publish(("ledSign/" + LEDSIGNID + "/state").c_str(), truncatedMsg.c_str(), true);
+        
+        // Update light state for Home Assistant
+        mqttManager->publish(("ledSign/" + LEDSIGNID + "/light_state").c_str(), "{\"state\":\"ON\"}", true);
       }
-      else if (strstr(option, "rotate") == option)
-      {
-        mode = BB_DM_ROTATE;
+      
+      // Cycle through file names
+      if (bbTextFileName > 'A' + numFiles) {
+        bbTextFileName = 'A';
       }
-      else if (strstr(option, "hold") == option)
-      {
-        mode = BB_DM_HOLD;
-      }
-      else if (strstr(option, "flash") == option)
-      {
-        mode = BB_DM_FLASH;
-      }
-      else if (strstr(option, "rollup") == option)
-      {
-        mode = BB_DM_ROLLUP;
-      }
-      else if (strstr(option, "rolldown") == option)
-      {
-        mode = BB_DM_ROLLDOWN;
-      }
-      else if (strstr(option, "rollleft") == option)
-      {
-        mode = BB_DM_ROLLLEFT;
-      }
-      else if (strstr(option, "rollright") == option)
-      {
-        mode = BB_DM_ROLLRIGHT;
-      }
-      else if (strstr(option, "wipeup") == option)
-      {
-        mode = BB_DM_WIPEUP;
-      }
-      else if (strstr(option, "wipedown") == option)
-      {
-        mode = BB_DM_WIPEDOWN;
-      }
-      else if (strstr(option, "wipeleft") == option)
-      {
-        mode = BB_DM_WIPELEFT;
-      }
-      else if (strstr(option, "wiperight") == option)
-      {
-        mode = BB_DM_WIPERIGHT;
-      }
-      else if (strstr(option, "scroll") == option)
-      {
-        mode = BB_DM_SCROLL;
-      }
-      else if (strstr(option, "automode") == option)
-      {
-        mode = BB_DM_AUTOMODE;
-      }
-      else if (strstr(option, "rollin") == option)
-      {
-        mode = BB_DM_ROLLIN;
-      }
-      else if (strstr(option, "rollout") == option)
-      {
-        mode = BB_DM_ROLLOUT;
-      }
-      else if (strstr(option, "wipein") == option)
-      {
-        mode = BB_DM_WIPEIN;
-      }
-      else if (strstr(option, "wipeout") == option)
-      {
-        mode = BB_DM_WIPEOUT;
-      }
-      else if (strstr(option, "comprotate") == option)
-      {
-        mode = BB_DM_COMPROTATE;
-      }
-      else if (strstr(option, "explode") == option)
-      {
-        mode = BB_DM_EXPLODE;
-      }
-      else if (strstr(option, "clock") == option)
-      {
-        mode = BB_DM_CLOCK;
-      }
-      else if (strstr(option, "twinkle") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_TWINKLE;
-      }
-      else if (strstr(option, "sparkle") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_SPARKLE;
-      }
-      else if (strstr(option, "snow") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_SNOW;
-      }
-      else if (strstr(option, "interlock") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_INTERLOCK;
-      }
-      else if (strstr(option, "switch") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_SWITCH;
-      }
-      else if (strstr(option, "slide") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_SLIDE;
-      }
-      else if (strstr(option, "spray") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_SPRAY;
-      }
-      else if (strstr(option, "starburst") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_STARBURST;
-      }
-      else if (strstr(option, "welcome") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_WELCOME;
-      }
-      else if (strstr(option, "slots") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_SLOTS;
-      }
-      else if (strstr(option, "newsflash") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_NEWSFLASH;
-      }
-      else if (strstr(option, "cyclecolors") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_CYCLECOLORS;
-      }
-      else if (strstr(option, "thankyou") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_THANKYOU;
-      }
-      else if (strstr(option, "nosmoking") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_NOSMOKING;
-      }
-      else if (strstr(option, "dontdrinkanddrive") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_DONTDRINKANDDRIVE;
-      }
-      else if (strstr(option, "fish") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_FISHIMAL;
-      }
-      else if (strstr(option, "fireworks") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_FIREWORKS;
-      }
-      else if (strstr(option, "balloon") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_TURBALLOON;
-      }
-      else if (strstr(option, "bomb") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_BOMB;
-      }
-      else
-      {
-        Serial.print("Unknown option:");
-        Serial.println(option);
-      }
-      option = strtok(NULL, ",");
-    }
-    msg = close_delim + 1;
-  }
-  Serial.println("");
-  Serial.print("Color: ");
-  Serial.print(color);
-  Serial.print(" Pos: ");
-  Serial.print(position);
-  Serial.print(" Mode: ");
-  Serial.print(mode);
-  Serial.print(" Special: ");
-  Serial.print(special);
-  Serial.print(" File: ");
-  Serial.println(bbTextFileName);
-  Serial.println(msg);
-  // bbTextFileName++;
-  bb.WriteTextFile(bbTextFileName++, msg, color, position, mode, special);
-  // check if more than numfiles files have been created and reset counter
-  if (bbTextFileName > 'A' + numFiles + 1)
-  {
-    bbTextFileName = 'A';
-  }
+      return;
+      
+    case INVALID_MESSAGE:
+    default:
+      Serial.println("Invalid or unrecognized message format");
+      return;  }
 }
 
 unsigned long getUptime()
@@ -648,107 +506,227 @@ int getRSSI()
   return WiFi.RSSI();
 }
 
-// Reconnect to MQTT if disconnected
-void reconnectMQTT()
-{
-  int c = 0;
-  while (!client.connected())
-  {
-    if (client.connect(("LEDSign_" + LEDSIGNID).c_str(), mqtt_user, mqtt_pass))
-    {
-      String message_topic = "ledSign/" + LEDSIGNID + "/message";
-      client.subscribe(message_topic.c_str());
-      client.subscribe("ledSign/message");
-    }
-    else
-    {
-      Serial.print("failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" trying again in 1 second");
-      delay(1000);
-      c++;
-    }
-  }
-}
-
 // Callback to handle incoming MQTT messages
 void callback(char *topic, byte *message, unsigned int length)
 {
-  String messageTemp;
-  for (int i = 0; i < length; i++)
-  {
-    messageTemp += (char)message[i];
+  // Create a null-terminated copy of the message
+  char messageBuffer[length + 1];
+  memcpy(messageBuffer, message, length);
+  messageBuffer[length] = '\0';
+  
+  Serial.print("Message received on topic: ");
+  Serial.println(topic);
+  
+  // Log first part of the message (up to 100 chars)
+  if (length > 100) {
+    Serial.print("Message (truncated): ");
+    char truncated[101];
+    memcpy(truncated, message, 100);
+    truncated[100] = '\0';
+    Serial.println(truncated);
+  } else {
+    Serial.print("Message: ");
+    Serial.println(messageBuffer);
   }
-  parsePayload(messageTemp.c_str());
+  
+  // Process the message
+  parsePayload(messageBuffer);
 }
 
 void initMQTT()
-{ // reads the stored values
-  // 0 - mqtt_server 1 - mqtt_port 2 - mqtt_user 3 - mqtt_pass
-  // take from myMenuItem
+{ 
+  // Get values from configuration
   strcpy(mqtt_server, myMenuItems[0].pdata);
   mqtt_port = atoi(myMenuItems[1].pdata);
   strcpy(mqtt_user, myMenuItems[2].pdata);
   strcpy(mqtt_pass, myMenuItems[3].pdata);
+  strncpy(tz, myMenuItems[4].pdata, sizeof(tz) - 1);  // Copy timezone from config safely
+  tz[sizeof(tz) - 1] = '\0';  // Ensure null termination
 
-  Serial.print("Configuring MQTT Server:");
+  Serial.print("Configuring MQTT Server: ");
   Serial.print(mqtt_server);
   Serial.print(":");
   Serial.println(mqtt_port);
-  client.setServer(mqtt_server, mqtt_port);
-  client.setCallback(callback);
-  reconnectMQTT();
-  ismqttConfigured = true;
-  Serial.println("Getting Date Time");
+    // Initialize the MQTT manager
+  mqttManager = new MQTTManager(&espClient);
+  mqttManager->configure(
+    mqtt_server, 
+    mqtt_port, 
+    mqtt_user, 
+    mqtt_pass, 
+    ("LEDSign_" + LEDSIGNID).c_str()
+  );
+  
+  // Set device details for Home Assistant discovery
+  mqttManager->setDeviceDetails(LEDSIGNID.c_str(), currentVersion);
+  
+  // Set up the message callback
+  mqttManager->setCallback(callback);
+    // Connect and subscribe to relevant topics
+  if (mqttManager->connect()) {
+    String message_topic = "ledSign/" + LEDSIGNID + "/message";
+    mqttManager->subscribe(message_topic.c_str());
+    mqttManager->subscribe("ledSign/message");
+    
+    // Subscribe to additional topic for JSON messages
+    mqttManager->subscribe(("ledSign/" + LEDSIGNID + "/json").c_str());
+    mqttManager->subscribe("ledSign/json");
+    
+    ismqttConfigured = true;
+      // Publish Home Assistant MQTT discovery information
+    if (mqttManager->isHassDiscoveryEnabled()) {
+      Serial.println("Publishing Home Assistant discovery information");
+      mqttManager->publishHassDiscovery();
+      
+      // Print detailed integration information
+      printHomeAssistantDetails();
+    }
+    
+    // Publish initial status
+    sendSensorUpdates();
+  } else {
+    Serial.println("Failed to connect to MQTT broker");
+  }
+  
+  // Configure timezone and get time
+  Serial.println("Setting timezone and getting date/time");
   configTzTime(tz, ntpServer);
   printDateTime();
 }
 
+// Print Home Assistant integration details
+void printHomeAssistantDetails() {
+  Serial.println("Home Assistant MQTT Integration Details:");
+  Serial.println("--------------------------------------");
+  Serial.println("Device ID: " + LEDSIGNID);
+  Serial.println("Base Topic: ledSign/" + LEDSIGNID);
+  
+  String nodeId = String(HASS_NODE_ID) + "_" + LEDSIGNID;
+  Serial.println("Home Assistant Node ID: " + nodeId);
+  
+  Serial.println("\nAvailable Entities:");
+  Serial.println("- Sensor: LED Sign Message");
+  Serial.println("- Text: LED Sign Display Text");
+  Serial.println("- Text: LED Sign JSON Command");
+  Serial.println("- Light: LED Sign");
+  Serial.println("- Button: LED Sign Clear");
+  Serial.println("- Sensor: LED Sign Signal");
+  Serial.println("- Sensor: LED Sign Uptime");
+  
+  Serial.println("\nTo use in Home Assistant:");
+  Serial.println("1. Make sure your MQTT broker is configured in Home Assistant");
+  Serial.println("2. Enable MQTT discovery in Home Assistant");
+  Serial.println("3. The sign should appear automatically in your devices");
+  Serial.println("4. You can use the entities in automations and scripts");
+  Serial.println("--------------------------------------");
+}
+
+// Clean up resources when shutting down or resetting
+void cleanup() {
+  if (mqttManager) {
+    // Remove Home Assistant discovery entries if enabled
+    if (mqttManager->isHassDiscoveryEnabled()) {
+      mqttManager->removeHassDiscovery();
+    }
+    
+    // Clean up MQTT manager
+    delete mqttManager;
+    mqttManager = nullptr;
+  }
+  
+  if (ESP_WiFiManager) {
+    // WiFi manager cleanup handled by the library
+  }
+  
+  ismqttConfigured = false;
+}
+
 void setup()
 {
+  // Initialize Serial
   Serial.begin(115200);
-  while (!Serial)
-    ;
+  while (!Serial && millis() < 5000) // Wait but timeout after 5 seconds
+    delay(10);
+    
+  Serial.println("\n\n=============================================");
   Serial.println("Starting LED Sign Controller. Darke Tech Corp. 2024");
+  Serial.print("Version: ");
+  Serial.println(currentVersion);
+  Serial.println("Home Assistant MQTT Discovery: " + String(HASS_DISCOVERY_ENABLED ? "Enabled" : "Disabled"));
+  Serial.println("=============================================");
+  
+  // Initialize the sign
   initSign();
-  Serial.println("Checking WiFi Connectivity through WiFiManager_Lite");
+  
+  // Initialize WiFi Manager
+  Serial.println("Configuring WiFi connection manager");
   ESP_WiFiManager = new ESP_WiFiManager_Lite();
   ESP_WiFiManager->setConfigPortalChannel(0);
   ESP_WiFiManager->setConfigPortalIP(IPAddress(192, 168, 50, 1));
   ESP_WiFiManager->setConfigPortal("LEDSign", "ledsign0");
+  
 #if USING_CUSTOMS_STYLE
   ESP_WiFiManager->setCustomsStyle(NewCustomsStyle);
 #endif
+
 #if USING_CUSTOMS_HEAD_ELEMENT
   ESP_WiFiManager->setCustomsHeadElement(PSTR("<style>html{filter: invert(10%);}</style>"));
 #endif
+
+  // Start WiFi Manager
   ESP_WiFiManager->begin("LEDSign");
+  
+  // Initialize MQTT Manager (but don't connect yet - will connect in loop)
+  mqttManager = new MQTTManager(&espClient);
+  
+  // Set random seed
+  randomSeed(analogRead(0));
+  
   Serial.println("Starting main loop");
 }
 
 void loop()
 {
-  ESP_WiFiManager->run(); // manages the wifi connections
+  // Always run WiFi manager first
+  ESP_WiFiManager->run();
+  
+  // Check WiFi connection
   if (WiFi.status() == WL_CONNECTED)
   {
-    if (!ismqttConfigured)                                            // perform initial setup once online
-    {
-      checkForUpdates(currentVersion, otaVersionURL, otaFirmwareURL); // check for updates
-      initMQTT();                                                     // also gets/updates time
+    if (!ismqttConfigured) {
+      // First-time setup when connected
+      checkForUpdates(currentVersion, otaVersionURL, otaFirmwareURL);
+      initMQTT();
       delay(50);
     }
     else {
-      client.loop();                                                  // callbacks will check for messages and config updates
-      if (millis() - lastUpdate > 60000)
-      { // send telemetry and show clock every minute-ish
+      // Regular operation when online
+      
+      // Process MQTT messages
+      if (mqttManager) {
+        mqttManager->loop();
+      }
+      
+      // Periodic tasks
+      unsigned long currentMillis = millis();
+      if (currentMillis - lastUpdate > 60000) {
+        // Every minute tasks
         sendSensorUpdates();
-        // showClock();
-        lastUpdate = millis();
+        showClock();
+        lastUpdate = currentMillis;
       }
     }
   }
   else
   {
-    showOfflineConnectionDetails();
+    // WiFi disconnected - show offline message
+    static unsigned long lastOfflineMessage = 0;
+    if (millis() - lastOfflineMessage > 60000) { // Show message once per minute
+      showOfflineConnectionDetails();
+      lastOfflineMessage = millis();
+    }
   }
+  
+  // Yield to the CPU to prevent watchdog issues
+  delay(1);
 }

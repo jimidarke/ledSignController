@@ -184,6 +184,9 @@
 #define SIGN_INIT_SPECIAL         SIGN_DEFAULT_SPECIAL
 #define SIGN_INIT_STRING          "Darke Tech Corp. 2024"
 
-
+// Home Assistant MQTT Auto Discovery
+#define HASS_DISCOVERY_PREFIX     "homeassistant"
+#define HASS_DISCOVERY_ENABLED    true
+#define HASS_NODE_ID              "ledsign"  // Will be combined with device ID
 
 #endif      //defines_h
