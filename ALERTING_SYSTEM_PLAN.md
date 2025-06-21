@@ -25,7 +25,7 @@ A centralized alerting system that accepts standardized alert messages and route
 
 ### 3. Output Channels
 **Multi-Modal Delivery**:
-- LED Sign (`ledSign/{device}/message`)
+- **LED Sign Display** (`ledSign/{device}/message`) - BetaBrite LED signs with comprehensive display control including 30+ animation modes, 16+ special effects, 10+ colors, multiple character sets, positioning options (topline, midline, botline, fill), and configurable speed/timing
 - Home Assistant notifications (`homeassistant/notify`)
 - Local file logging (`alerts/log`)
 - Mobile push notifications (Home Assistant app)
@@ -59,6 +59,17 @@ A centralized alerting system that accepts standardized alert messages and route
       "time_range": "08:00-22:00",
       "days": ["mon", "tue", "wed", "thu", "fri"]
     }
+  },
+  "display_config": {
+    "position": "topline",
+    "mode": "newsflash",
+    "special_effect": "starburst",
+    "color": "red",
+    "character_set": "7high",
+    "speed": 3,
+    "flash": true,
+    "priority": true,
+    "duration": 30
   }
 }
 ```
@@ -78,6 +89,17 @@ A centralized alerting system that accepts standardized alert messages and route
 - `routing.types`: Target specific output types
 - `routing.exclude`: Exclude specific outputs
 - `routing.conditions`: Time/day conditions for delivery
+
+### Display Configuration (Optional)
+- `display_config.position`: Text positioning (topline, midline, botline, fill, left, right)
+- `display_config.mode`: Animation mode (30+ options: rotate, hold, flash, scroll, explode, newsflash, etc.)
+- `display_config.special_effect`: Visual effects (16+ options: twinkle, sparkle, snow, starburst, fireworks, etc.)
+- `display_config.color`: Text color (10+ options: red, green, amber, yellow, rainbow, autocolor, etc.)
+- `display_config.character_set`: Font style (5high, 7high, 10high, 7shadow, 7fancy, etc.)
+- `display_config.speed`: Animation speed (1-5, where 1=slowest, 5=fastest)
+- `display_config.flash`: Enable character flashing (true/false)
+- `display_config.priority`: Interrupt normal display rotation (true/false)
+- `display_config.duration`: Display duration in seconds (for priority messages)
 
 ### Alert Levels
 - `critical`: Immediate attention required
