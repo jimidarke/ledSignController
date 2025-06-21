@@ -1,726 +1,691 @@
+/**
+ * @file main.cpp
+ * @brief LED Sign Controller - Main Application Entry Point
+ * 
+ * ESP32-based LED sign controller that connects BetaBrite/Alpha Protocol LED signs
+ * to WiFi and MQTT for remote message control. This refactored version uses a modular
+ * architecture for better maintainability and security.
+ * 
+ * Key Features:
+ * - Secure MQTT communication with exponential backoff
+ * - Rich message parsing with colors, animations, and effects
+ * - Priority message handling for urgent communications
+ * - Automatic clock display with NTP synchronization
+ * - Robust error handling and input validation
+ * - Comprehensive telemetry and health monitoring
+ * - Modular architecture for easy maintenance
+ * 
+ * Hardware Requirements:
+ * - ESP32 development board
+ * - BetaBrite LED sign with RS232/TTL interface
+ * - Serial connection: RX pin 16, TX pin 17
+ * 
+ * @author LED Sign Controller Project
+ * @version 0.1.4
+ * @date 2024
+ */
 
 #include "defines.h"
 #include <SPI.h>
 #include <WiFi.h>
-#include <PubSubClient.h>
+#include <time.h>
+
+// Project modules
+#include "MessageParser.h"
+#include "MQTTManager.h"
+#include "SignController.h"
+// #include "SecureOTA.h"  // TODO: Implement SecureOTA.cpp
+
+// Third-party libraries
 #include <ArduinoJson.h>
-#include "OTAupdate.h" // OTA Updates call checkForUpdates()
+#include "OTAupdate.h" // Legacy OTA - will be replaced with SecureOTA
 
-// examples of strings with options
-// [red]as of 10/28/12 07:38pm
-// [snow,green]Some Text here, it is green with snow effect
-// [amber,rotate]I'm amber and I rotate
-// [green, rotate]green
-// [red,interlock]Monday
-// [green,rotate]
+/**
+ * @brief Application version and build information
+ */
+const char* APP_VERSION = "0.1.4";
+const char* BUILD_DATE = __DATE__ " " __TIME__;
 
-const char *currentVersion = "0.1.4";
-
+/**
+ * @brief WiFi and network configuration
+ */
 char wifi_ssid[32] = SIGN_DEFAULT_SSID;
 char wifi_pass[32] = SIGN_DEFAULT_PASS;
+
+/**
+ * @brief MQTT configuration parameters
+ */
 char mqtt_server[40] = "";
 uint16_t mqtt_port = 1883;
 char mqtt_user[32] = "";
 char mqtt_pass[32] = "";
-int sign_max_files = 5; // number of files on the sign (before they get overridden by new ones)
 
-// POSIX time zone string for Mountain Time with DST
-const char *tz = SIGN_TIMEZONE_POSIX;
+/**
+ * @brief Time zone configuration for clock display
+ * POSIX time zone string for Mountain Time with DST
+ */
+const char* timezone_posix = SIGN_TIMEZONE_POSIX;
+const char* ntp_server = "pool.ntp.org";
 
-// NTP server
-const char *ntpServer = "pool.ntp.org";
+/**
+ * @brief OTA update server configuration
+ * TODO: Replace with secure HTTPS endpoints
+ */
+const char* ota_version_url = "http://docker02.darketech.ca:8003/version.txt";
+const char* ota_firmware_url = "http://docker02.darketech.ca:8003/firmware.bin";
 
-// OTA Update Server details
-const char *otaVersionURL = "http://docker02.darketech.ca:8003/version.txt"; // 0.0.1
-const char *otaFirmwareURL = "http://docker02.darketech.ca:8003/firmware.bin";
+/**
+ * @brief Global object instances
+ */
+WiFiClient wifi_client;                          ///< WiFi client for network operations
+ESP_WiFiManager_Lite* wifi_manager = nullptr;   ///< WiFi configuration manager
+BETABRITE led_sign(1, 16, 17);                 ///< BetaBrite sign interface (ID=1, RX=16, TX=17)
+MQTTManager* mqtt_manager = nullptr;             ///< MQTT connection manager
+SignController* sign_controller = nullptr;       ///< LED sign control interface
+// SecureOTA* ota_manager = nullptr;               ///< Secure OTA update manager
 
-WiFiClient espClient;
-PubSubClient client(espClient);
-ESP_WiFiManager_Lite *ESP_WiFiManager;
-BETABRITE bb(1, 16, 17); // SerialID (always 1), RX pin, TX pin
+/**
+ * @brief Application state variables
+ */
+String device_id;                               ///< Unique device identifier (from MAC)
+bool services_initialized = false;             ///< Whether network services are ready
+unsigned long last_health_check = 0;           ///< Last system health check timestamp
+unsigned long last_time_sync = 0;              ///< Last NTP time synchronization
 
-bool inPriority = false;
-bool ismqttConfigured = false;
+/**
+ * @brief System health monitoring interval (30 seconds)
+ */
+const unsigned long HEALTH_CHECK_INTERVAL = 30000;
 
-String LEDSIGNID; // will update later using MAC address
+/**
+ * @brief Time synchronization interval (1 hour)
+ */
+const unsigned long TIME_SYNC_INTERVAL = 3600000;
 
-char bbTextFileName = 'A';
-int numFiles = sign_max_files; // replace this
-unsigned long lastUpdate = 0;
-unsigned long clockStart = 0;
+/**
+ * @brief WiFi connection monitoring intervals
+ */
+const unsigned long WIFI_CHECK_INTERVAL = 30000;
+const unsigned long MEMORY_REPORT_INTERVAL = 60000;
 
-// declare functions before using them
-void parsePayload(const char *msg);
-void reconnectMQTT();
-void callback(char *topic, byte *message, unsigned int length);
-unsigned long getUptime();
-void smartDelay(int delay_ms);
-
+/**
+ * @brief Custom CSS styling for WiFi configuration portal
+ */
 #if USING_CUSTOMS_STYLE
-const char NewCustomsStyle[] PROGMEM = "<style>div,input{padding:5px;font-size:1em;}input{width:95%;}body{text-align: center;}"
-                                       "button{background-color:blue;color:white;line-height:2.4rem;font-size:1.2rem;width:100%;}fieldset{border-radius:0.3rem;margin:0px;}</style>";
+const char NewCustomsStyle[] PROGMEM = 
+    "<style>"
+    "div,input{padding:5px;font-size:1em;}"
+    "input{width:95%;}"
+    "body{text-align: center;font-family: Arial, sans-serif;}"
+    "button{background-color:#007bff;color:white;line-height:2.4rem;font-size:1.2rem;width:100%;border:none;border-radius:4px;}"
+    "fieldset{border-radius:0.3rem;margin:0px;border: 1px solid #ddd;}"
+    ".header{background-color:#343a40;color:white;padding:10px;margin-bottom:20px;}"
+    "</style>";
 #endif
 
-void sendSensorUpdates()
-{
-  if (!ismqttConfigured)
-    return;
-  // RSSI
-  client.publish(("ledSign/" + LEDSIGNID + "/rssi").c_str(), String(WiFi.RSSI()).c_str(), true);
-  // IP Address
-  client.publish(("ledSign/" + LEDSIGNID + "/ip").c_str(), WiFi.localIP().toString().c_str(), true);
-  // Uptime
-  client.publish(("ledSign/" + LEDSIGNID + "/uptime").c_str(), String(millis() / 1000).c_str(), true);
-  Serial.print("RSSI: ");
-  Serial.println(WiFi.RSSI());
-}
+/**
+ * @brief Function declarations
+ */
+void initializeDevice();
+void initializeNetworkServices();
+void handleMQTTMessage(char* topic, uint8_t* payload, unsigned int length);
+void performHealthCheck();
+void syncTime();
+void smartDelay(unsigned long delay_ms);
+void printSystemInfo();
+void handleSystemReset();
 
-void printDateTime(bool UseMilitaryTime = false)
-{
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo))
-  {
-    Serial.println("Failed to obtain time");
-    return;
-  }
-
-  // Print date
-  Serial.print("Date: ");
-  Serial.print(timeinfo.tm_year + 1900); // Year
-  Serial.print("-");
-  Serial.print((timeinfo.tm_mon + 1) < 10 ? "0" : ""); // Leading zero for month
-  Serial.print(timeinfo.tm_mon + 1);                   // Month
-  Serial.print("-");
-  Serial.print(timeinfo.tm_mday < 10 ? "0" : ""); // Leading zero for day
-  Serial.println(timeinfo.tm_mday);               // Day
-
-  // Determine hour and AM/PM for 12-hour format if needed
-  int displayHour = timeinfo.tm_hour;
-  bool isPM = false;
-
-  if (!UseMilitaryTime)
-  {
-    if (displayHour >= 12)
-    {
-      isPM = true;
-      if (displayHour > 12)
-        displayHour -= 12; // Convert to 12-hour format
+/**
+ * @brief Arduino setup function - runs once at startup
+ * 
+ * Initializes all hardware and software components:
+ * - Serial communication
+ * - LED sign interface
+ * - WiFi management
+ * - Device identification
+ */
+void setup() {
+    // Initialize serial communication
+    Serial.begin(115200);
+    while (!Serial && millis() < 5000) {
+        delay(10); // Wait up to 5 seconds for serial to be ready
     }
-    else if (displayHour == 0)
-    {
-      displayHour = 12; // Midnight in 12-hour format
+    
+    Serial.println();
+    Serial.println("========================================");
+    Serial.println("LED Sign Controller Starting Up");
+    Serial.println("Darke Tech Corp. 2024");
+    Serial.println("========================================");
+    Serial.print("Version: ");
+    Serial.println(APP_VERSION);
+    Serial.print("Build: ");
+    Serial.println(BUILD_DATE);
+    Serial.println();
+    
+    // Initialize device and hardware
+    initializeDevice();
+    
+    // Print system information
+    printSystemInfo();
+    
+    Serial.println("System initialization complete");
+    Serial.println("Entering main loop...");
+    Serial.println();
+}
+
+/**
+ * @brief Arduino main loop - runs continuously
+ * 
+ * Handles the main application logic:
+ * - WiFi connection management
+ * - Network service initialization
+ * - System health monitoring
+ * - Service orchestration
+ */
+void loop() {
+    static unsigned long last_wifi_check = 0;
+    static unsigned long last_memory_report = 0;
+    unsigned long current_time = millis();
+    
+    // Always run WiFi manager
+    if (wifi_manager) {
+        wifi_manager->run();
     }
-  }
-
-  // Print time
-  Serial.print("Time: ");
-  Serial.print(displayHour < 10 ? "0" : ""); // Leading zero for hour
-  Serial.print(displayHour);
-  Serial.print(":");
-  Serial.print(timeinfo.tm_min < 10 ? "0" : ""); // Leading zero for minute
-  Serial.print(timeinfo.tm_min);
-  Serial.print(":");
-  Serial.print(timeinfo.tm_sec < 10 ? "0" : ""); // Leading zero for second
-  Serial.print(timeinfo.tm_sec);
-
-  if (!UseMilitaryTime)
-  {
-    Serial.print(isPM ? " PM" : " AM");
-  }
-  Serial.println();
-}
-
-String generateRandomString(int length)
-{
-  const char characters[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  const int charactersLength = sizeof(characters) - 1;
-  String result = "";
-  for (int i = 0; i < length; i++)
-  {
-    result += characters[random(0, charactersLength)];
-  }
-  return result;
-}
-
-void showAllSignOptions() // runs through all color, special, mode, and position options for the sign
-{
-  // Define the four lists
-  const char colors[] = {
-      BB_COL_AMBER, BB_COL_AUTOCOLOR, BB_COL_BROWN, BB_COL_COLORMIX,
-      BB_COL_DIMGREEN, BB_COL_DIMRED, BB_COL_GREEN, BB_COL_ORANGE,
-      BB_COL_RAINBOW1, BB_COL_RAINBOW2, BB_COL_RED, BB_COL_YELLOW};
-
-  const char specials[] = {
-      BB_SDM_TWINKLE, BB_SDM_SPARKLE, BB_SDM_SNOW, BB_SDM_INTERLOCK,
-      BB_SDM_SWITCH, BB_SDM_SLIDE, BB_SDM_SPRAY, BB_SDM_STARBURST,
-      BB_SDM_WELCOME, BB_SDM_SLOTS, BB_SDM_NEWSFLASH, BB_SDM_TRUMPET,
-      BB_SDM_CYCLECOLORS, BB_SDM_THANKYOU, BB_SDM_NOSMOKING,
-      BB_SDM_DONTDRINKANDDRIVE, BB_SDM_FISHIMAL, BB_SDM_FIREWORKS,
-      BB_SDM_TURBALLOON, BB_SDM_BOMB};
-
-  const char modes[] = {
-      BB_DM_ROTATE, BB_DM_HOLD, BB_DM_FLASH, BB_DM_ROLLUP,
-      BB_DM_ROLLDOWN, BB_DM_ROLLLEFT, BB_DM_ROLLRIGHT, BB_DM_WIPEUP,
-      BB_DM_WIPEDOWN, BB_DM_WIPELEFT, BB_DM_WIPERIGHT, BB_DM_SCROLL,
-      BB_DM_SPECIAL, BB_DM_AUTOMODE, BB_DM_ROLLIN, BB_DM_ROLLOUT,
-      BB_DM_WIPEIN, BB_DM_WIPEOUT, BB_DM_COMPROTATE, BB_DM_EXPLODE,
-      BB_DM_CLOCK};
-
-  const char positions[] = {
-      BB_DP_MIDLINE, BB_DP_TOPLINE, BB_DP_BOTLINE,
-      BB_DP_FILL, BB_DP_LEFT, BB_DP_RIGHT};
-
-  // default options
-  char default_color = BB_COL_AUTOCOLOR;
-  char default_position = BB_DP_TOPLINE;
-  char default_mode = BB_DM_ROTATE;
-  char default_special = BB_SDM_TWINKLE;
-
-  // Iterate Specials first, then iterate through the rest
-  for (int i = 0; i < sizeof(specials) / sizeof(specials[0]); i++)
-  {
-    char special = specials[i];
-    String randomMsg = generateRandomString(4);
-    Serial.print(special);
-    Serial.print(": ");
-    Serial.println(randomMsg);
-    bb.CancelPriorityTextFile();
-    bb.WritePriorityTextFile(randomMsg.c_str(), default_color, default_position, default_mode, special);
-    // smartDelay(15000); // 15 seconds
-  }
-}
-
-void showOfflineConnectionDetails() // displays on the sign the wifi info and such when its offline
-{
-  bb.CancelPriorityTextFile(); // turns off init screens. blocking.
-  /*
-  You are offline
-  Connect to WiFi
-  LEDSign
-  Password
-  ledsign0
-  Have a great day
-  [thank you]
-  */
-  // default options
-  char color = BB_COL_AUTOCOLOR;
-  char position = BB_DP_TOPLINE;
-  char mode = BB_DM_HOLD;
-  char special = BB_SDM_TWINKLE;
-  String msg;
-  msg = "*Offline*";
-  bb.WritePriorityTextFile(msg.c_str(), BB_COL_RED, position, BB_DM_EXPLODE, special);
-  smartDelay(5000);
-  bb.CancelPriorityTextFile();
-  msg = "Connect to:";
-  bb.WritePriorityTextFile(msg.c_str(), BB_COL_GREEN, position, BB_DM_HOLD, special);
-  smartDelay(1500);
-  bb.CancelPriorityTextFile();
-  msg = "LEDSign";
-  bb.WritePriorityTextFile(msg.c_str(), BB_COL_ORANGE, position, mode, special);
-  smartDelay(5000);
-  bb.CancelPriorityTextFile();
-  msg = "Password";
-  bb.WritePriorityTextFile(msg.c_str(), BB_COL_GREEN, position, mode, special);
-  smartDelay(1500);
-  bb.CancelPriorityTextFile();
-  msg = "ledsign0";
-  bb.WritePriorityTextFile(msg.c_str(), BB_COL_ORANGE, position, mode, special);
-  smartDelay(5000);
-  bb.CancelPriorityTextFile();
-  msg = "";
-  bb.WritePriorityTextFile(msg.c_str(), color, position, BB_DM_SPECIAL, BB_SDM_THANKYOU);
-  smartDelay(3500);
-}
-
-String getFriendlyDateTime()
-{
-  time_t now = time(nullptr);
-  struct tm *timeinfo;
-  timeinfo = localtime(&now);
-  char buffer[80];
-  strftime(buffer, 80, "%m/%d %I:%M %p", timeinfo);
-  return String(buffer);
-}
-
-void clearTextFiles()
-{ // clears all values i.e. wipes the screen
-  // iterates from A to numFiles and clears the text files
-  for (char i = 'A'; i < 'A' + numFiles + 1; i++)
-  {
-    Serial.print("Clearing Text File: ");
-    Serial.println(i);
-    bb.WriteTextFile(i, "", SIGN_DEFAULT_COLOUR, SIGN_DEFAULT_POSITION, SIGN_DEFAULT_MODE, SIGN_DEFAULT_SPECIAL);
-  }
-  bbTextFileName = 'A';
-}
-
-void showClock()
-{ // renders the time
-  String dtime = getFriendlyDateTime();
-  Serial.println(dtime);
-  char color = SIGN_CLOCK_COLOUR;
-  char position = SIGN_CLOCK_POSITION;
-  char mode = SIGN_CLOCK_MODE;
-  char special = SIGN_CLOCK_SPECIAL;
-  if (!inPriority)
-  {
-    bb.CancelPriorityTextFile();
-    bb.WritePriorityTextFile(dtime.c_str(), color, position, mode, special);
-    clockStart = millis();
-  }
-}
-
-void initSign()
-{
-  // init sign
-  Serial.println("Initializing LED sign through TTL - RS232 Serial connection");
-  String mac = WiFi.macAddress();
-  mac.replace(":", "");
-  LEDSIGNID = mac;
-  Serial.print("Sign ID: ");
-  Serial.println(LEDSIGNID);
-  bbTextFileName = 'A';
-  Serial.println("Setting Sign Memory Config...");
-  bb.SetMemoryConfiguration(bbTextFileName, numFiles);
-  delay(500);
-  Serial.println("Sending Default Message");
-  bb.WritePriorityTextFile(SIGN_INIT_STRING, SIGN_INIT_COLOUR, SIGN_INIT_POSITION, SIGN_INIT_MODE, SIGN_INIT_SPECIAL);
-  inPriority = false;
-  clockStart = 0;
-}
-
-// smart delay to allow background processes to still occur
-void smartDelay(int delay_ms)
-{
-  int stoptime = millis() + delay_ms;
-  while (millis() < stoptime)
-  {
-    if (ismqttConfigured)
-    {
-      reconnectMQTT();
-      client.loop(); // callbacks will check for messages and config updates
-      // turn off clock if times up
-      if (millis() - clockStart > SIGN_SHOW_CLOCK_DELAY_MS && clockStart > 0 && !inPriority)
-      { // hide after ten seconds
-        bb.CancelPriorityTextFile();
-      }
-      if (millis() - lastUpdate > 60000)
-      { // send telemetry and show clock every minute-ish
-        sendSensorUpdates();
-        showClock();
-        lastUpdate = millis();
-      }
+    
+    // Periodic WiFi status monitoring
+    if (current_time - last_wifi_check > WIFI_CHECK_INTERVAL) {
+        Serial.print("WiFi Status: ");
+        Serial.print(WiFi.status());
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.print(" (Connected to ");
+            Serial.print(WiFi.SSID());
+            Serial.print(", RSSI: ");
+            Serial.print(WiFi.RSSI());
+            Serial.print(", IP: ");
+            Serial.print(WiFi.localIP().toString());
+            Serial.println(")");
+        } else {
+            Serial.println(" (Disconnected)");
+        }
+        last_wifi_check = current_time;
     }
-    ESP_WiFiManager->run(); // manages the wifi connections
-    delay(1);
-  }
-}
-
-void parsePayload(const char *msg)
-{
-  // check if first character is # this will clear the sign
-  if (msg[0] == '#')
-  {
-    Serial.println("Clearing Internal Data");
-    clearTextFiles();
-    initSign();
-    return;
-  }
-
-  if (msg[0] == '^')
-  { // factory reset
-    clearTextFiles();
-    Serial.println("");
-    Serial.println("Clearing All Data and Resetting");
-    Serial.println("UGHhh Imm Dying DIEING");
-    ESP_WiFiManager->clearConfigData();
-    ESP_WiFiManager->resetAndEnterConfigPortal();
-  }
-
-  // default options
-  char color = BB_COL_AUTOCOLOR;
-  char position = BB_DP_TOPLINE;
-  char mode = BB_DM_ROTATE;
-  char special = BB_SDM_TWINKLE;
-
-  // check if first character is a * to denote a priority message
-  if (msg[0] == '*')
-  {
-    inPriority = true; // global var
-    msg++;
-    Serial.println("### Priority Message ###");
-    Serial.println(msg);
-    bb.CancelPriorityTextFile();
-    bb.WritePriorityTextFile("# # # #", BB_COL_RED, BB_DP_TOPLINE, BB_DM_FLASH, BB_SDM_TWINKLE);
-    smartDelay(2500); // 5 seconds delay to display priority message warning
-    bb.CancelPriorityTextFile();
-    bb.WritePriorityTextFile(msg, color, position, mode, special);
-    smartDelay(25000); // 20 seconds delay to display actual priority message
-    bb.CancelPriorityTextFile();
-    inPriority = false;
-    return;
-  }
-
-  // handle options
-  char *open_delim = strchr(msg, '[');
-  char *close_delim = strchr(msg, ']');
-  if (open_delim == msg && close_delim != NULL && !inPriority)
-  {
-    int options_length = close_delim - open_delim;
-    char options[options_length];
-    strncpy(options, msg + 1, options_length - 1);
-    options[options_length - 1] = '\0';
-    Serial.print("options: ");
-    Serial.println(options);
-    char *option = strtok(options, ",");
-    while (option != NULL)
-    {
-      if (strstr(option, "trumpet") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_TRUMPET;
-      }
-      else if (strstr(option, "red") == option)
-      {
-        color = BB_COL_RED;
-      }
-      else if (strstr(option, "amber") == option)
-      {
-        color = BB_COL_AMBER;
-      }
-      else if (strstr(option, "green") == option)
-      {
-        color = BB_COL_GREEN;
-      }
-      else if (strstr(option, "rotate") == option)
-      {
-        mode = BB_DM_ROTATE;
-      }
-      else if (strstr(option, "hold") == option)
-      {
-        mode = BB_DM_HOLD;
-      }
-      else if (strstr(option, "flash") == option)
-      {
-        mode = BB_DM_FLASH;
-      }
-      else if (strstr(option, "rollup") == option)
-      {
-        mode = BB_DM_ROLLUP;
-      }
-      else if (strstr(option, "rolldown") == option)
-      {
-        mode = BB_DM_ROLLDOWN;
-      }
-      else if (strstr(option, "rollleft") == option)
-      {
-        mode = BB_DM_ROLLLEFT;
-      }
-      else if (strstr(option, "rollright") == option)
-      {
-        mode = BB_DM_ROLLRIGHT;
-      }
-      else if (strstr(option, "wipeup") == option)
-      {
-        mode = BB_DM_WIPEUP;
-      }
-      else if (strstr(option, "wipedown") == option)
-      {
-        mode = BB_DM_WIPEDOWN;
-      }
-      else if (strstr(option, "wipeleft") == option)
-      {
-        mode = BB_DM_WIPELEFT;
-      }
-      else if (strstr(option, "wiperight") == option)
-      {
-        mode = BB_DM_WIPERIGHT;
-      }
-      else if (strstr(option, "scroll") == option)
-      {
-        mode = BB_DM_SCROLL;
-      }
-      else if (strstr(option, "automode") == option)
-      {
-        mode = BB_DM_AUTOMODE;
-      }
-      else if (strstr(option, "rollin") == option)
-      {
-        mode = BB_DM_ROLLIN;
-      }
-      else if (strstr(option, "rollout") == option)
-      {
-        mode = BB_DM_ROLLOUT;
-      }
-      else if (strstr(option, "wipein") == option)
-      {
-        mode = BB_DM_WIPEIN;
-      }
-      else if (strstr(option, "wipeout") == option)
-      {
-        mode = BB_DM_WIPEOUT;
-      }
-      else if (strstr(option, "comprotate") == option)
-      {
-        mode = BB_DM_COMPROTATE;
-      }
-      else if (strstr(option, "explode") == option)
-      {
-        mode = BB_DM_EXPLODE;
-      }
-      else if (strstr(option, "clock") == option)
-      {
-        mode = BB_DM_CLOCK;
-      }
-      else if (strstr(option, "twinkle") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_TWINKLE;
-      }
-      else if (strstr(option, "sparkle") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_SPARKLE;
-      }
-      else if (strstr(option, "snow") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_SNOW;
-      }
-      else if (strstr(option, "interlock") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_INTERLOCK;
-      }
-      else if (strstr(option, "switch") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_SWITCH;
-      }
-      else if (strstr(option, "slide") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_SLIDE;
-      }
-      else if (strstr(option, "spray") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_SPRAY;
-      }
-      else if (strstr(option, "starburst") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_STARBURST;
-      }
-      else if (strstr(option, "welcome") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_WELCOME;
-      }
-      else if (strstr(option, "slots") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_SLOTS;
-      }
-      else if (strstr(option, "newsflash") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_NEWSFLASH;
-      }
-      else if (strstr(option, "cyclecolors") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_CYCLECOLORS;
-      }
-      else if (strstr(option, "thankyou") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_THANKYOU;
-      }
-      else if (strstr(option, "nosmoking") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_NOSMOKING;
-      }
-      else if (strstr(option, "dontdrinkanddrive") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_DONTDRINKANDDRIVE;
-      }
-      else if (strstr(option, "fish") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_FISHIMAL;
-      }
-      else if (strstr(option, "fireworks") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_FIREWORKS;
-      }
-      else if (strstr(option, "balloon") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_TURBALLOON;
-      }
-      else if (strstr(option, "bomb") == option)
-      {
-        mode = BB_DM_SPECIAL;
-        special = BB_SDM_BOMB;
-      }
-      else
-      {
-        Serial.print("Unknown option:");
-        Serial.println(option);
-      }
-      option = strtok(NULL, ",");
+    
+    // Periodic memory usage reporting
+    if (current_time - last_memory_report > MEMORY_REPORT_INTERVAL) {
+        Serial.print("Memory - Free: ");
+        Serial.print(ESP.getFreeHeap());
+        Serial.print(" bytes, Min Free: ");
+        Serial.print(ESP.getMinFreeHeap());
+        Serial.print(" bytes, Heap Size: ");
+        Serial.println(ESP.getHeapSize());
+        last_memory_report = current_time;
     }
-    msg = close_delim + 1;
-  }
-  Serial.println("");
-  Serial.print("Color: ");
-  Serial.print(color);
-  Serial.print(" Pos: ");
-  Serial.print(position);
-  Serial.print(" Mode: ");
-  Serial.print(mode);
-  Serial.print(" Special: ");
-  Serial.print(special);
-  Serial.print(" File: ");
-  Serial.println(bbTextFileName);
-  Serial.println(msg);
-  // bbTextFileName++;
-  bb.WriteTextFile(bbTextFileName++, msg, color, position, mode, special);
-  // check if more than numfiles files have been created and reset counter
-  if (bbTextFileName > 'A' + numFiles + 1)
-  {
-    bbTextFileName = 'A';
-  }
-}
-
-unsigned long getUptime()
-{
-  return millis() / 1000; // Uptime in seconds
-}
-
-String getIPAddress()
-{
-  return WiFi.localIP().toString();
-}
-
-String getMACAddress()
-{
-  return WiFi.macAddress();
-}
-
-int getRSSI()
-{
-  return WiFi.RSSI();
-}
-
-// Reconnect to MQTT if disconnected
-void reconnectMQTT()
-{
-  int c = 0;
-  while (!client.connected())
-  {
-    if (client.connect(("LEDSign_" + LEDSIGNID).c_str(), mqtt_user, mqtt_pass))
-    {
-      String message_topic = "ledSign/" + LEDSIGNID + "/message";
-      client.subscribe(message_topic.c_str());
-      client.subscribe("ledSign/message");
+    
+    // Handle WiFi connection state
+    if (WiFi.status() == WL_CONNECTED) {
+        // Initialize network services on first connection
+        if (!services_initialized) {
+            Serial.println("WiFi connected - initializing network services");
+            initializeNetworkServices();
+        }
+        
+        // Run network services if initialized
+        if (services_initialized) {
+            // Handle MQTT communication
+            if (mqtt_manager) {
+                mqtt_manager->loop();
+            }
+            
+            // Handle OTA updates
+            // TODO: Implement SecureOTA
+            // if (ota_manager) {
+            //     ota_manager->loop();
+            // }
+            
+            // Perform periodic health checks
+            if (current_time - last_health_check > HEALTH_CHECK_INTERVAL) {
+                performHealthCheck();
+                last_health_check = current_time;
+            }
+            
+            // Periodic time synchronization
+            if (current_time - last_time_sync > TIME_SYNC_INTERVAL) {
+                syncTime();
+                last_time_sync = current_time;
+            }
+        }
+        
+        // Short delay for online operation
+        smartDelay(100);
+    } else {
+        // WiFi disconnected - show offline information
+        services_initialized = false;
+        
+        if (sign_controller) {
+            sign_controller->showOfflineMode();
+        }
+        
+        Serial.println("WiFi disconnected - displaying offline information");
     }
-    else
-    {
-      Serial.print("failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" trying again in 1 second");
-      delay(1000);
-      c++;
-      if (c > 5)
-      {
-        Serial.println("Can't seem to connect? Maybe the server info is wrong?");
-        Serial.print("Server: ");
-        Serial.print(mqtt_server);
-        Serial.print(":");
-        Serial.println(mqtt_port);
-        Serial.println("Going to reboot just for the fuck of it");
+    
+    // Always run sign controller loop for timing management
+    if (sign_controller) {
+        sign_controller->loop();
+    }
+}
+
+/**
+ * @brief Initialize device hardware and core components
+ * 
+ * Sets up the LED sign, WiFi manager, and device identification.
+ * This function handles the fundamental device initialization that
+ * must occur regardless of network connectivity.
+ */
+void initializeDevice() {
+    Serial.println("Initializing device hardware...");
+    
+    // Generate unique device ID from MAC address
+    String mac = WiFi.macAddress();
+    mac.replace(":", "");
+    device_id = mac;
+    Serial.print("Device ID: ");
+    Serial.println(device_id);
+    
+    // Initialize LED sign controller
+    sign_controller = new SignController(&led_sign, device_id);
+    if (!sign_controller->begin()) {
+        Serial.println("Warning: LED sign initialization failed");
+        // Continue anyway - sign might be temporarily disconnected
+    }
+    
+    // Initialize WiFi manager
+    Serial.println("Initializing WiFi manager...");
+    wifi_manager = new ESP_WiFiManager_Lite();
+    
+    if (wifi_manager) {
+        // Configure WiFi manager settings
+        wifi_manager->setConfigPortalChannel(0);
+        wifi_manager->setConfigPortalIP(IPAddress(192, 168, 50, 1));
+        wifi_manager->setConfigPortal("LEDSign", "ledsign0");
+        
+        #if USING_CUSTOMS_STYLE
+        wifi_manager->setCustomsStyle(NewCustomsStyle);
+        #endif
+        
+        #if USING_CUSTOMS_HEAD_ELEMENT
+        wifi_manager->setCustomsHeadElement(PSTR("<style>html{filter: invert(10%);}</style>"));
+        #endif
+        
+        // Start WiFi manager
+        wifi_manager->begin("LEDSign");
+        Serial.println("WiFi manager initialized successfully");
+    } else {
+        Serial.println("Error: Failed to create WiFi manager");
+    }
+    
+    // Initialize random number generator
+    randomSeed(analogRead(0) + millis());
+    
+    Serial.println("Device hardware initialization complete");
+}
+
+/**
+ * @brief Initialize network-dependent services
+ * 
+ * Sets up MQTT, OTA, and time synchronization services that require
+ * an active WiFi connection. Called once when WiFi connects.
+ */
+void initializeNetworkServices() {
+    Serial.println("Initializing network services...");
+    
+    try {
+        // Initialize time synchronization first
+        Serial.println("Configuring NTP time synchronization...");
+        configTzTime(timezone_posix, ntp_server);
+        delay(2000); // Give NTP time to sync
+        
+        struct tm timeinfo;
+        if (getLocalTime(&timeinfo)) {
+            Serial.print("Current time: ");
+            Serial.print(asctime(&timeinfo));
+            last_time_sync = millis();
+        } else {
+            Serial.println("Warning: NTP synchronization failed");
+        }
+        
+        // Initialize MQTT manager
+        Serial.println("Initializing MQTT manager...");
+        mqtt_manager = new MQTTManager(&wifi_client, device_id);
+        
+        if (mqtt_manager) {
+            // Configure MQTT from stored parameters
+            if (strlen(myMenuItems[0].pdata) > 0) {
+                // Extract MQTT configuration from WiFiManager data
+                strcpy(mqtt_server, myMenuItems[0].pdata);
+                mqtt_port = atoi(myMenuItems[1].pdata);
+                strcpy(mqtt_user, myMenuItems[2].pdata);
+                strcpy(mqtt_pass, myMenuItems[3].pdata);
+                
+                // Configure MQTT manager
+                if (mqtt_manager->configure(mqtt_server, mqtt_port, mqtt_user, mqtt_pass)) {
+                    mqtt_manager->setMessageCallback(handleMQTTMessage);
+                    
+                    if (mqtt_manager->begin()) {
+                        Serial.println("MQTT manager initialized successfully");
+                    } else {
+                        Serial.println("Warning: MQTT manager initialization failed");
+                    }
+                } else {
+                    Serial.println("Warning: MQTT configuration invalid");
+                }
+            } else {
+                Serial.println("Info: MQTT not configured - check WiFi portal");
+            }
+        }
+        
+        // TODO: Initialize secure OTA manager when implementation is complete
+        // Serial.println("Initializing OTA update manager...");
+        // ota_manager = new SecureOTA(APP_VERSION, device_id);
+        
+        // Legacy OTA check (will be removed when SecureOTA is complete)
+        Serial.println("Performing legacy OTA check...");
+        checkForUpdates(APP_VERSION, ota_version_url, ota_firmware_url);
+        
+        services_initialized = true;
+        Serial.println("All network services initialized successfully");
+        
+    } catch (const std::exception& e) {
+        Serial.print("Error during service initialization: ");
+        Serial.println(e.what());
+        services_initialized = false;
+    } catch (...) {
+        Serial.println("Unknown error during service initialization");
+        services_initialized = false;
+    }
+}
+
+/**
+ * @brief Handle incoming MQTT messages
+ * 
+ * Processes MQTT messages received from subscribed topics, validates them,
+ * and routes them to appropriate handlers (message display, system commands).
+ * 
+ * @param topic MQTT topic the message was received on
+ * @param payload Message payload bytes
+ * @param length Length of payload in bytes
+ */
+void handleMQTTMessage(char* topic, uint8_t* payload, unsigned int length) {
+    // Validate input parameters
+    if (!topic || !payload || length == 0) {
+        Serial.println("MQTT: Invalid message parameters");
+        return;
+    }
+    
+    // Log received message
+    Serial.print("MQTT Message [");
+    Serial.print(topic);
+    Serial.print("]: ");
+    
+    // Convert payload to string
+    String message;
+    message.reserve(length + 1);
+    for (unsigned int i = 0; i < length; i++) {
+        message += (char)payload[i];
+    }
+    Serial.println(message);
+    
+    // Validate message using MessageParser
+    if (!MessageParser::validateMessage(message.c_str())) {
+        Serial.println("MQTT: Message validation failed");
+        return;
+    }
+    
+    // Handle system commands
+    if (MessageParser::isSystemCommand(message.c_str())) {
+        if (sign_controller) {
+            char command = message.charAt(0);
+            if (sign_controller->handleSystemCommand(command)) {
+                Serial.print("MQTT: System command ");
+                Serial.print(command);
+                Serial.println(" executed");
+                
+                // Handle factory reset command
+                if (command == '^') {
+                    handleSystemReset();
+                }
+            }
+        }
+        return;
+    }
+    
+    // Handle priority messages
+    if (MessageParser::isPriorityMessage(message.c_str())) {
+        if (sign_controller) {
+            String priority_content = message.substring(1); // Remove * prefix
+            sign_controller->displayPriorityMessage(priority_content.c_str());
+        }
+        return;
+    }
+    
+    // Handle normal messages with option parsing
+    char color, position, mode, special;
+    String message_content;
+    
+    if (MessageParser::parseMessage(message.c_str(), &color, &position, &mode, &special, &message_content)) {
+        if (sign_controller) {
+            sign_controller->displayMessage(message_content.c_str(), color, position, mode, special);
+        }
+    } else {
+        Serial.println("MQTT: Message parsing failed");
+    }
+}
+
+/**
+ * @brief Perform system health checks
+ * 
+ * Monitors system health including memory usage, WiFi signal strength,
+ * MQTT connectivity, and component status. Reports issues and attempts
+ * automatic recovery where possible.
+ */
+void performHealthCheck() {
+    Serial.println("Performing system health check...");
+    
+    // Check memory health
+    size_t free_heap = ESP.getFreeHeap();
+    size_t min_free_heap = ESP.getMinFreeHeap();
+    
+    if (free_heap < 10000) { // Less than 10KB free
+        Serial.print("Warning: Low memory - Free: ");
+        Serial.print(free_heap);
+        Serial.println(" bytes");
+    }
+    
+    if (min_free_heap < 5000) { // Minimum free dropped below 5KB
+        Serial.print("Warning: Memory fragmentation detected - Min free: ");
+        Serial.print(min_free_heap);
+        Serial.println(" bytes");
+    }
+    
+    // Check WiFi signal strength
+    if (WiFi.status() == WL_CONNECTED) {
+        int rssi = WiFi.RSSI();
+        if (rssi < -80) {
+            Serial.print("Warning: Weak WiFi signal - RSSI: ");
+            Serial.print(rssi);
+            Serial.println(" dBm");
+        }
+    }
+    
+    // Check MQTT connectivity
+    if (mqtt_manager && mqtt_manager->isConfigured()) {
+        if (!mqtt_manager->isConnected()) {
+            Serial.println("Warning: MQTT disconnected");
+        }
+    }
+    
+    // Check sign controller status
+    if (sign_controller) {
+        String sign_status = sign_controller->getStatus();
+        // Status is mainly for debugging, not printed regularly to avoid spam
+    }
+    
+    // Display health indicator on sign occasionally
+    static int health_counter = 0;
+    if (health_counter++ % 10 == 0 && sign_controller && !sign_controller->isInPriorityMode()) {
+        // Show a quick health indicator every 10th health check (5 minutes)
+        String health_msg = "OK " + WiFi.localIP().toString();
+        sign_controller->displayMessage(health_msg.c_str(), BB_COL_GREEN, BB_DP_TOPLINE, BB_DM_HOLD, BB_SDM_TWINKLE);
+    }
+}
+
+/**
+ * @brief Synchronize system time with NTP servers
+ * 
+ * Performs NTP time synchronization and updates the system clock.
+ * Called periodically to maintain accurate time for clock display
+ * and logging timestamps.
+ */
+void syncTime() {
+    Serial.println("Synchronizing time with NTP server...");
+    
+    configTzTime(timezone_posix, ntp_server);
+    delay(1000); // Give NTP time to sync
+    
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+        Serial.print("Time synchronized: ");
+        Serial.print(asctime(&timeinfo));
+        
+        // Display current time on sign
+        if (sign_controller && !sign_controller->isInPriorityMode()) {
+            sign_controller->displayClock();
+        }
+    } else {
+        Serial.println("Warning: NTP synchronization failed");
+    }
+}
+
+/**
+ * @brief Handle factory reset command
+ * 
+ * Performs a complete factory reset including WiFi configuration
+ * clearing and device restart. This is a destructive operation
+ * that returns the device to initial setup state.
+ */
+void handleSystemReset() {
+    Serial.println("========================================");
+    Serial.println("FACTORY RESET INITIATED");
+    Serial.println("Clearing all configuration data...");
+    Serial.println("========================================");
+    
+    // Clear WiFi configuration
+    if (wifi_manager) {
+        wifi_manager->clearConfigData();
+    }
+    
+    // Clear any saved preferences
+    // TODO: Add preferences clearing when implemented
+    
+    // Display reset message on sign
+    if (sign_controller) {
+        sign_controller->displayPriorityMessage("Factory Reset");
+    }
+    
+    delay(3000); // Give user time to see message
+    
+    Serial.println("Restarting device...");
+    
+    // Reset and enter configuration portal
+    if (wifi_manager) {
+        wifi_manager->resetAndEnterConfigPortal();
+    } else {
         ESP.restart();
-      }
     }
-  }
 }
 
-// Callback to handle incoming MQTT messages
-void callback(char *topic, byte *message, unsigned int length)
-{
-  String messageTemp;
-  for (int i = 0; i < length; i++)
-  {
-    messageTemp += (char)message[i];
-  }
-  parsePayload(messageTemp.c_str());
-}
-
-void initMQTT()
-{ // reads the stored values
-  // 0 - mqtt_server 1 - mqtt_port 2 - mqtt_user 3 - mqtt_pass
-  // take from myMenuItem
-  strcpy(mqtt_server, myMenuItems[0].pdata);
-  mqtt_port = atoi(myMenuItems[1].pdata);
-  strcpy(mqtt_user, myMenuItems[2].pdata);
-  strcpy(mqtt_pass, myMenuItems[3].pdata);
-
-  Serial.print("Configuring MQTT Server:");
-  Serial.print(mqtt_server);
-  Serial.print(":");
-  Serial.println(mqtt_port);
-  client.setServer(mqtt_server, mqtt_port);
-  client.setCallback(callback);
-  ismqttConfigured = true;
-  reconnectMQTT();
-  Serial.println("Getting Date Time");
-  configTzTime(tz, ntpServer);
-  printDateTime();
-}
-
-void setup()
-{
-  Serial.begin(115200);
-  while (!Serial)
-    ;
-  Serial.println("Starting LED Sign Controller. Darke Tech Corp. 2024");
-  initSign();
-  Serial.println("Checking WiFi Connectivity through WiFiManager_Lite");
-  ESP_WiFiManager = new ESP_WiFiManager_Lite();
-  ESP_WiFiManager->setConfigPortalChannel(0);
-  ESP_WiFiManager->setConfigPortalIP(IPAddress(192, 168, 50, 1));
-  ESP_WiFiManager->setConfigPortal("LEDSign", "ledsign0");
-#if USING_CUSTOMS_STYLE
-  ESP_WiFiManager->setCustomsStyle(NewCustomsStyle);
-#endif
-#if USING_CUSTOMS_HEAD_ELEMENT
-  ESP_WiFiManager->setCustomsHeadElement(PSTR("<style>html{filter: invert(10%);}</style>"));
-#endif
-  ESP_WiFiManager->begin("LEDSign");
-  Serial.println("Starting main loop");
-}
-
-void loop()
-{
-  ESP_WiFiManager->run(); // manages the wifi connections
-  if (WiFi.status() == WL_CONNECTED)
-  {
-    if (!ismqttConfigured)
-    {
-      checkForUpdates(currentVersion, otaVersionURL, otaFirmwareURL); // check for updates
-      initMQTT();                                                     // also gets/updates time
-      delay(100);
+/**
+ * @brief Smart delay function that maintains background operations
+ * 
+ * Provides a non-blocking delay that continues to service WiFi management,
+ * MQTT communication, and other background tasks during the delay period.
+ * 
+ * @param delay_ms Delay duration in milliseconds
+ */
+void smartDelay(unsigned long delay_ms) {
+    unsigned long start_time = millis();
+    
+    while (millis() - start_time < delay_ms) {
+        // Service WiFi manager
+        if (wifi_manager) {
+            wifi_manager->run();
+        }
+        
+        // Service MQTT if connected
+        if (mqtt_manager && services_initialized) {
+            mqtt_manager->loop();
+        }
+        
+        // Service sign controller
+        if (sign_controller) {
+            sign_controller->loop();
+        }
+        
+        // Small delay to prevent excessive CPU usage
+        delay(1);
+        
+        // Yield to other tasks
+        yield();
     }
-    smartDelay(100); // main "online" loop
-  }
-  else
-  {
-    showOfflineConnectionDetails();
-  }
+}
+
+/**
+ * @brief Print comprehensive system information
+ * 
+ * Displays detailed system information including hardware details,
+ * network configuration, memory status, and component versions.
+ * Useful for debugging and system monitoring.
+ */
+void printSystemInfo() {
+    Serial.println("========================================");
+    Serial.println("SYSTEM INFORMATION");
+    Serial.println("========================================");
+    
+    // Hardware information
+    Serial.print("Chip Model: ");
+    Serial.println(ESP.getChipModel());
+    Serial.print("Chip Revision: ");
+    Serial.println(ESP.getChipRevision());
+    Serial.print("CPU Frequency: ");
+    Serial.print(ESP.getCpuFreqMHz());
+    Serial.println(" MHz");
+    Serial.print("Flash Size: ");
+    Serial.print(ESP.getFlashChipSize() / 1024 / 1024);
+    Serial.println(" MB");
+    
+    // Memory information
+    Serial.print("Heap Size: ");
+    Serial.print(ESP.getHeapSize());
+    Serial.println(" bytes");
+    Serial.print("Free Heap: ");
+    Serial.print(ESP.getFreeHeap());
+    Serial.println(" bytes");
+    Serial.print("PSRAM Size: ");
+    Serial.print(ESP.getPsramSize());
+    Serial.println(" bytes");
+    
+    // Network information
+    Serial.print("MAC Address: ");
+    Serial.println(WiFi.macAddress());
+    Serial.print("Device ID: ");
+    Serial.println(device_id);
+    
+    // Software versions
+    Serial.print("Arduino Core: ");
+    Serial.println(ESP.getSdkVersion());
+    Serial.print("Application: ");
+    Serial.println(APP_VERSION);
+    Serial.print("Build Date: ");
+    Serial.println(BUILD_DATE);
+    
+    Serial.println("========================================");
 }
