@@ -116,41 +116,24 @@ Hello World
 ^          Factory reset device
 ```
 
-### Available Options
+### Display Capabilities
 
-#### Colors
-| Option | Description | BetaBrite Code |
-|--------|-------------|----------------|
-| `red` | Red text | `BB_COL_RED` |
-| `amber` | Amber/orange text | `BB_COL_AMBER` |
-| `green` | Green text | `BB_COL_GREEN` |
-| `yellow` | Yellow text | `BB_COL_YELLOW` |
-| `orange` | Orange text | `BB_COL_ORANGE` |
-| `rainbow1` | Rainbow effect 1 | `BB_COL_RAINBOW1` |
-| `autocolor` | Automatic color cycling | `BB_COL_AUTOCOLOR` |
+The BetaBrite LED sign supports extensive display customization through the Alpha Protocol. This project provides access to:
 
-#### Display Modes
-| Option | Description | BetaBrite Code |
-|--------|-------------|----------------|
-| `rotate` | Text rotates in place | `BB_DM_ROTATE` |
-| `hold` | Static display | `BB_DM_HOLD` |
-| `flash` | Flashing text | `BB_DM_FLASH` |
-| `scroll` | Scrolling text | `BB_DM_SCROLL` |
-| `rollup` | Roll up animation | `BB_DM_ROLLUP` |
-| `rolldown` | Roll down animation | `BB_DM_ROLLDOWN` |
-| `wipeleft` | Wipe left animation | `BB_DM_WIPELEFT` |
-| `explode` | Explode effect | `BB_DM_EXPLODE` |
+- **30+ Display Modes**: Including rotate, flash, scroll, explode, wipe effects, and roll animations
+- **16+ Special Effects**: Atmospheric effects like snow, sparkle, fireworks, and themed animations
+- **10+ Colors**: Standard colors, dimmed variants, rainbow patterns, and automatic color cycling
+- **Multiple Character Sets**: From 5-pixel compact fonts to 10-pixel large displays with decorative options
+- **Advanced Positioning**: Top, middle, bottom line positioning with fill and alignment controls
+- **Priority Messaging**: Interrupt normal display rotation with urgent messages
 
-#### Special Effects
-| Option | Description | BetaBrite Code |
-|--------|-------------|----------------|
-| `twinkle` | Twinkling stars | `BB_SDM_TWINKLE` |
-| `sparkle` | Sparkling effect | `BB_SDM_SPARKLE` |
-| `snow` | Falling snow | `BB_SDM_SNOW` |
-| `fireworks` | Fireworks display | `BB_SDM_FIREWORKS` |
-| `welcome` | Welcome animation | `BB_SDM_WELCOME` |
-| `thankyou` | Thank you animation | `BB_SDM_THANKYOU` |
-| `trumpet` | Trumpet fanfare | `BB_SDM_TRUMPET` |
+📖 **Complete Reference**: See [BETABRITE.md](BETABRITE.md) for comprehensive documentation of all 200+ display options.
+
+#### Quick Reference - Most Used Options
+
+**Colors**: `red`, `amber`, `green`, `yellow`, `orange`, `rainbow1`, `autocolor`  
+**Display Modes**: `rotate`, `hold`, `flash`, `scroll`, `rollup`, `explode`, `wipeleft`  
+**Special Effects**: `twinkle`, `sparkle`, `snow`, `fireworks`, `welcome`, `starburst`, `newsflash`
 
 ## 🏠 Home Assistant Integration
 
