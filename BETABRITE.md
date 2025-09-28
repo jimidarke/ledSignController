@@ -286,16 +286,25 @@ sign.WriteTextFile('B', "[amber,scroll,sparkle]Warning Message");
 sign.WriteTextFile('C', "[green,rotate,twinkle]Status Update");
 ```
 
-## Integration with Alert Router
+## Integration with Alert Router System
 
-The alert router can map incoming alerts to appropriate BetaBrite display configurations:
+The BetaBrite library integrates seamlessly with the centralized Alert Router Service, enabling rich, contextually appropriate displays based on alert metadata. The alert router maps incoming alert messages to specific BetaBrite display configurations using the complete range of available animations and effects.
 
+### Alert Router to BetaBrite Mapping
+
+#### JSON Alert Message Format
 ```json
 {
+  "timestamp": "2024-01-15T10:30:00Z",
+  "level": "critical",
+  "category": "security",
+  "title": "Motion Detected",
+  "message": "Front door motion sensor triggered",
+  "source": "security_system",
   "display_config": {
     "position": "fill",
-    "mode": "flash", 
-    "special_effect": "starburst",
+    "mode": "explode", 
+    "special_effect": "bomb",
     "color": "red",
     "character_set": "10high",
     "speed": 5,
@@ -305,4 +314,283 @@ The alert router can map incoming alerts to appropriate BetaBrite display config
 }
 ```
 
-This comprehensive feature set allows for highly expressive and contextually appropriate alert displays that can convey not just the message content, but also the urgency, type, and emotional tone of each alert.
+#### ESP32 Integration Code Example
+```cpp
+void SignController::processAlertMessage(const String& payload) {
+    JsonDocument doc;
+    deserializeJson(doc, payload);
+    
+    String message = doc["message"].as<String>();
+    String title = doc["title"].as<String>();
+    JsonObject displayConfig = doc["display_config"];
+    
+    if (displayConfig && !displayConfig.isNull()) {
+        // Map JSON config to BetaBrite constants
+        char position = mapPosition(displayConfig["position"].as<String>());
+        char mode = mapDisplayMode(displayConfig["mode"].as<String>());
+        char effect = mapSpecialEffect(displayConfig["special_effect"].as<String>());
+        char color = mapColor(displayConfig["color"].as<String>());
+        
+        String fullMessage = title + ": " + message;
+        
+        if (displayConfig["priority"].as<bool>()) {
+            betabrite.WritePriorityTextFile(fullMessage.c_str(), color, position, mode, effect);
+        } else {
+            betabrite.WriteTextFile('A', fullMessage.c_str(), color, position, mode, effect);
+        }
+    } else {
+        // Fallback to simple display
+        betabrite.WriteTextFile('A', (title + ": " + message).c_str());
+    }
+}
+```
+
+### Alert Level to Animation Presets
+
+#### Critical Alerts - Maximum Impact
+- **Mode**: `explode` or `flash` for immediate attention
+- **Effect**: `bomb`, `starburst`, or `newsflash` for urgency
+- **Color**: `red` for emergency status
+- **Character Set**: `10high` or `fhigh` for maximum visibility
+- **Position**: `fill` to use entire display
+- **Priority**: Always `true` to interrupt normal rotation
+
+```json
+{
+  "display_config": {
+    "position": "fill",
+    "mode": "explode",
+    "special_effect": "bomb",
+    "color": "red",
+    "character_set": "10high",
+    "speed": 5,
+    "priority": true,
+    "duration": 60
+  }
+}
+```
+
+#### Warning Alerts - Attention Grabbing
+- **Mode**: `newsflash` or `scroll` for visibility
+- **Effect**: `trumpet`, `sparkle`, or `starburst` for importance
+- **Color**: `amber` or `orange` for caution
+- **Character Set**: `7high` for readability
+- **Position**: `topline` for prominence
+
+```json
+{
+  "display_config": {
+    "position": "topline",
+    "mode": "newsflash",
+    "special_effect": "trumpet",
+    "color": "amber",
+    "character_set": "7high",
+    "speed": 3
+  }
+}
+```
+
+#### Info Alerts - Gentle Display
+- **Mode**: `scroll` or `rotate` for continuous display
+- **Effect**: `twinkle`, `welcome`, or `sparkle` for pleasant viewing
+- **Color**: `green` or `autocolor` for positive tone
+- **Character Set**: `7high` for standard readability
+- **Position**: `midline` for standard placement
+
+```json
+{
+  "display_config": {
+    "position": "midline",
+    "mode": "scroll",
+    "special_effect": "twinkle",
+    "color": "green",
+    "character_set": "7high",
+    "speed": 2
+  }
+}
+```
+
+### Category-Specific Animation Themes
+
+#### Security Alerts
+**High-Impact, Attention-Grabbing Effects**
+```json
+{
+  "security_critical": {
+    "mode": "flash",
+    "special_effect": "starburst",
+    "color": "red",
+    "character_set": "10high",
+    "position": "fill",
+    "priority": true
+  },
+  "security_warning": {
+    "mode": "newsflash",
+    "special_effect": "trumpet",
+    "color": "amber",
+    "character_set": "7high",
+    "position": "topline"
+  }
+}
+```
+
+#### Weather Alerts
+**Atmospheric, Contextual Effects**
+```json
+{
+  "weather_storm": {
+    "mode": "wipedown",
+    "special_effect": "spray",
+    "color": "amber",
+    "character_set": "7high"
+  },
+  "weather_snow": {
+    "mode": "scroll",
+    "special_effect": "snow",
+    "color": "autocolor",
+    "character_set": "7high"
+  },
+  "weather_wind": {
+    "mode": "slide",
+    "special_effect": "turballoon",
+    "color": "yellow",
+    "character_set": "7high"
+  }
+}
+```
+
+#### System Status
+**Professional, Informational Display**
+```json
+{
+  "system_error": {
+    "mode": "flash",
+    "special_effect": "interlock",
+    "color": "red",
+    "character_set": "7high"
+  },
+  "system_warning": {
+    "mode": "compressed_rotate",
+    "special_effect": "sparkle",
+    "color": "amber",
+    "character_set": "7high"
+  },
+  "system_ok": {
+    "mode": "rotate",
+    "special_effect": "twinkle",
+    "color": "green",
+    "character_set": "7high"
+  }
+}
+```
+
+#### Celebration/Positive News
+**Festive, Joyful Effects**
+```json
+{
+  "celebration": {
+    "mode": "explode",
+    "special_effect": "fireworks",
+    "color": "rainbow1",
+    "character_set": "10high",
+    "position": "fill"
+  },
+  "achievement": {
+    "mode": "rollin",
+    "special_effect": "welcome",
+    "color": "colormix",
+    "character_set": "7highfancy"
+  },
+  "completion": {
+    "mode": "wipein",
+    "special_effect": "thankyou",
+    "color": "green",
+    "character_set": "7shadow"
+  }
+}
+```
+
+### Advanced Integration Features
+
+#### Multi-Zone Display Support
+```cpp
+// Route different alerts to different sign zones
+if (alertLevel == "critical") {
+    // Send to all zones
+    sendToZone("kitchen", alertMessage, criticalConfig);
+    sendToZone("living_room", alertMessage, criticalConfig);
+    sendToZone("office", alertMessage, criticalConfig);
+} else if (alertCategory == "weather") {
+    // Send only to main display zone
+    sendToZone("living_room", alertMessage, weatherConfig);
+}
+```
+
+#### Priority Queue Management
+```cpp
+// Handle priority messages with duration control
+if (displayConfig["priority"].as<bool>()) {
+    int duration = displayConfig["duration"].as<int>();
+    
+    // Set priority message
+    betabrite.WritePriorityTextFile(message.c_str(), color, position, mode, effect);
+    
+    // Schedule return to normal rotation after duration
+    scheduler.scheduleTask([this]() {
+        betabrite.CancelPriorityTextFile();
+    }, duration * 1000);
+}
+```
+
+#### Dynamic Configuration Updates
+```cpp
+// Update display based on alert metadata
+if (metadata.containsKey("temperature")) {
+    float temp = metadata["temperature"].as<float>();
+    if (temp > 85) {
+        // Use "hot" themed display
+        effect = BB_SDM_SPRAY;
+        color = BB_COL_RED;
+    } else if (temp < 32) {
+        // Use "cold" themed display  
+        effect = BB_SDM_SNOW;
+        color = BB_COL_BLUE;
+    }
+}
+```
+
+### Performance Optimization
+
+#### Efficient Command Generation
+```cpp
+class BetaBriteCommandBuilder {
+public:
+    String buildCommand(const JsonObject& config, const String& message) {
+        // Pre-build command sequences for common configurations
+        String cmd = "";
+        cmd += mapToHardwareCode(config["mode"].as<String>());
+        cmd += mapToHardwareCode(config["special_effect"].as<String>());
+        cmd += mapToHardwareCode(config["color"].as<String>());
+        cmd += message;
+        return cmd;
+    }
+    
+private:
+    char mapToHardwareCode(const String& configValue) {
+        // Fast lookup table for configuration mapping
+        static const std::map<String, char> mappings = {
+            {"explode", BB_DM_EXPLODE},
+            {"bomb", BB_SDM_BOMB},
+            {"red", BB_COL_RED}
+            // ... complete mapping table
+        };
+        return mappings.at(configValue);
+    }
+};
+```
+
+### Complete Display Capability Matrix
+
+The BetaBrite system supports **23 display modes × 21 special effects × 12 colors × 14 character sets = 84,168 unique display combinations**, enabling highly expressive and contextually appropriate alert presentations that convey not just message content, but also urgency, type, and emotional tone.
+
+This comprehensive integration allows the LED sign controller to serve as a powerful, visually rich output channel in the centralized alerting architecture, providing immediate visual feedback that matches the severity and context of each alert.

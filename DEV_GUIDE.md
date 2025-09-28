@@ -147,6 +147,101 @@ The `display_config` object allows fine-grained control over BetaBrite LED sign 
 }
 ```
 
+### Complete BetaBrite Display Options
+
+#### All Available Display Modes (23 options)
+| Mode | Description | Visual Effect | Best For |
+|------|-------------|---------------|----------|
+| `rotate` | Cycles through text files | Basic rotation | Default display |
+| `hold` | Static display | No movement | Important messages |
+| `flash` | Text blinks on/off | Flashing | Critical alerts |
+| `rollup` | Text rolls up from bottom | Vertical motion | Smooth transitions |
+| `rolldown` | Text rolls down from top | Vertical motion | Announcements |
+| `rollleft` | Text rolls in from right | Horizontal motion | Side entry |
+| `rollright` | Text rolls in from left | Horizontal motion | Side entry |
+| `wipeup` | Text wipes upward | Clean reveal | Professional look |
+| `wipedown` | Text wipes downward | Clean reveal | Top-down info |
+| `wipeleft` | Text wipes leftward | Horizontal reveal | Left-to-right reading |
+| `wiperight` | Text wipes rightward | Horizontal reveal | Right-to-left effect |
+| `scroll` | Text scrolls horizontally | Continuous scroll | Long messages |
+| `special` | Enables special effects | Effect-dependent | Enhanced presentations |
+| `automode` | Sign chooses method | Automatic | General purpose |
+| `rollin` | Text rolls in from edges | Converging motion | Focused attention |
+| `rollout` | Text rolls out to edges | Diverging motion | Expanding effect |
+| `wipein` | Text wipes in from edges | Converging reveal | Centered focus |
+| `wipeout` | Text wipes out to edges | Diverging reveal | Spreading effect |
+| `compressed_rotate` | Compact rotation | Space-efficient | Multiple messages |
+| `explode` | Text explodes outward | Explosive effect | Maximum impact |
+| `clock` | Time/date display | Clock format | Timestamps |
+
+#### All Available Special Effects (21 options)
+| Effect | Description | Mood/Theme | Best For |
+|--------|-------------|------------|----------|
+| `twinkle` | Stars twinkling | Gentle, pleasant | Info messages |
+| `sparkle` | Sparkling lights | Celebratory | Good news |
+| `snow` | Falling snow | Winter, weather | Weather alerts |
+| `interlock` | Interlocking pattern | Mechanical | System status |
+| `switch` | Switching pattern | Toggle effect | State changes |
+| `slide` | Sliding motion | Smooth directional | Transitions |
+| `spray` | Water spray effect | Dynamic, energetic | Active alerts |
+| `starburst` | Explosive star | Dramatic attention | Critical alerts |
+| `welcome` | Welcome message | Greeting, hospitality | Positive messages |
+| `slots` | Slot machine effect | Random, gaming | Fun notifications |
+| `newsflash` | Breaking news style | Urgent updates | Important news |
+| `trumpet` | Trumpet fanfare | Announcement | Celebrations |
+| `cyclecolors` | Color cycling | Rainbow effect | Dynamic display |
+| `thankyou` | Thank you message | Gratitude | Completion |
+| `nosmoking` | No smoking symbol | Warning | Prohibition |
+| `dontdrinkanddrive` | Safety message | Safety warning | Warnings |
+| `fishimal` | Fish animation | Playful, aquatic | Fun messages |
+| `fireworks` | Fireworks explosion | Celebration | Major events |
+| `turballoon` | Turbulent balloon | Floating, dynamic | Atmospheric |
+| `bomb` | Explosion effect | Extreme urgency | Emergencies |
+
+#### All Available Colors (12 options)
+| Color | Description | Mood | Usage |
+|-------|-------------|------|-------|
+| `red` | Bright red | Urgent, critical | Emergencies |
+| `green` | Bright green | Success, normal | Good status |
+| `amber` | Amber/orange | Caution, warning | Warnings |
+| `dimred` | Darker red | Subdued urgent | Quiet alerts |
+| `dimgreen` | Darker green | Subtle positive | Background |
+| `brown` | Brown/dark amber | Neutral | Information |
+| `orange` | Orange | Moderate warning | Attention |
+| `yellow` | Bright yellow | Attention | Highlights |
+| `rainbow1` | Rainbow pattern | Multi-color | Dynamic |
+| `rainbow2` | Alt rainbow | Multi-color | Variety |
+| `colormix` | Mixed colors | Varied display | Creative |
+| `autocolor` | Auto selection | Automatic | Default |
+
+#### All Available Character Sets (14 options)
+| Set | Description | Height | Style | Best For |
+|-----|-------------|--------|-------|----------|
+| `5high` | Basic 5-pixel | Small | Simple | Compact text |
+| `5stroke` | 5-pixel outline | Small | Outlined | Contrast |
+| `7high` | Standard 7-pixel | Medium | Clean | General use |
+| `7stroke` | 7-pixel outline | Medium | Outlined | Visibility |
+| `7highfancy` | Decorative 7-pixel | Medium | Stylized | Special messages |
+| `10high` | Large 10-pixel | Large | Bold | Important text |
+| `7shadow` | Shadow effect | Medium | Dimensional | Depth |
+| `fhighfancy` | Full height decorative | Maximum | Elegant | Formal |
+| `fhigh` | Full height standard | Maximum | Bold | Maximum impact |
+| `7shadowfancy` | Shadow + decoration | Medium | Ornate | Elaborate |
+| `5wide` | 5-pixel wide | Small | Compact wide | Space-efficient |
+| `7wide` | 7-pixel wide | Medium | Standard wide | Readable wide |
+| `7widefancy` | Decorative wide | Medium | Stylized wide | Special wide |
+| `5widestroke` | 5-pixel wide outline | Small | Outlined wide | Contrast wide |
+
+#### All Available Positions (6 options)
+| Position | Description | Usage |
+|----------|-------------|-------|
+| `topline` | Upper display area | Headers, titles |
+| `midline` | Center display area | Main content |
+| `botline` | Lower display area | Status, footers |
+| `fill` | Full display area | Maximum visibility |
+| `left` | Left-aligned | Standard alignment |
+| `right` | Right-aligned | Numbers, timestamps |
+
 ### Display Configuration Fields
 
 | Field | Type | Options | Description |
@@ -165,30 +260,30 @@ The `display_config` object allows fine-grained control over BetaBrite LED sign 
 
 ### Level-Based Display Presets
 
-#### Critical Alerts
+#### Critical Alerts - Maximum Impact
 ```json
 {
   "display_config": {
     "position": "fill",
-    "mode": "flash",
-    "special_effect": "starburst", 
+    "mode": "explode",
+    "special_effect": "bomb", 
     "color": "red",
     "character_set": "10high",
     "speed": 5,
     "flash": true,
     "priority": true,
-    "character_attributes": ["shadow", "wide"]
+    "duration": 30
   }
 }
 ```
 
-#### Warning Alerts  
+#### Warning Alerts - Attention Grabbing
 ```json
 {
   "display_config": {
     "position": "topline",
     "mode": "newsflash",
-    "special_effect": "sparkle",
+    "special_effect": "trumpet",
     "color": "amber",
     "character_set": "7high", 
     "speed": 3,
@@ -197,7 +292,7 @@ The `display_config` object allows fine-grained control over BetaBrite LED sign 
 }
 ```
 
-#### Info Alerts
+#### Info Alerts - Gentle Display
 ```json
 {
   "display_config": {
@@ -211,41 +306,93 @@ The `display_config` object allows fine-grained control over BetaBrite LED sign 
 }
 ```
 
-### Category-Specific Presets
-
-#### Security Alerts
+#### Debug Alerts - Minimal Distraction
 ```json
 {
   "display_config": {
-    "mode": "explode",
-    "special_effect": "starburst",
-    "color": "red",
-    "speed": 4,
-    "priority": true
+    "position": "botline",
+    "mode": "hold",
+    "special_effect": "none",
+    "color": "dimgreen",
+    "character_set": "5high",
+    "speed": 1
   }
 }
 ```
 
-#### Weather Alerts
+### Category-Specific Presets
+
+#### Security Alerts - Immediate Attention
 ```json
 {
   "display_config": {
+    "position": "fill",
+    "mode": "flash",
+    "special_effect": "starburst",
+    "color": "red",
+    "character_set": "10high",
+    "speed": 5,
+    "priority": true,
+    "flash": true
+  }
+}
+```
+
+#### Weather Alerts - Atmospheric
+```json
+{
+  "display_config": {
+    "position": "topline",
     "mode": "scroll", 
     "special_effect": "snow",
     "color": "amber",
+    "character_set": "7high",
     "speed": 2
   }
 }
 ```
 
-#### System Status
+#### System Status - Informational
 ```json
 {
   "display_config": {
-    "mode": "rotate",
+    "position": "midline",
+    "mode": "compressed_rotate",
     "special_effect": "sparkle", 
     "color": "autocolor",
+    "character_set": "7high",
     "speed": 2
+  }
+}
+```
+
+#### Celebration - Festive
+```json
+{
+  "display_config": {
+    "position": "fill",
+    "mode": "explode",
+    "special_effect": "fireworks",
+    "color": "rainbow1",
+    "character_set": "10high",
+    "speed": 4
+  }
+}
+```
+
+#### Emergency - Maximum Urgency
+```json
+{
+  "display_config": {
+    "position": "fill",
+    "mode": "flash",
+    "special_effect": "bomb",
+    "color": "red",
+    "character_set": "fhigh",
+    "speed": 5,
+    "priority": true,
+    "flash": true,
+    "duration": 60
   }
 }
 ```

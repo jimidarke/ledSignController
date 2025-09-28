@@ -25,7 +25,7 @@ A centralized alerting system that accepts standardized alert messages and route
 
 ### 3. Output Channels
 **Multi-Modal Delivery**:
-- **LED Sign Display** (`ledSign/{device}/message`) - BetaBrite LED signs with comprehensive display control including 30+ animation modes, 16+ special effects, 10+ colors, multiple character sets, positioning options (topline, midline, botline, fill), and configurable speed/timing
+- **LED Sign Display** (`ledSign/{device}/message`) - BetaBrite LED signs with comprehensive display control including 23+ animation modes, 21+ special effects, 12+ colors, 14+ character sets, 6 positioning options (topline, midline, botline, fill, left, right), configurable speed/timing, and priority message handling
 - Home Assistant notifications (`homeassistant/notify`)
 - Local file logging (`alerts/log`)
 - Mobile push notifications (Home Assistant app)
@@ -92,10 +92,10 @@ A centralized alerting system that accepts standardized alert messages and route
 
 ### Display Configuration (Optional)
 - `display_config.position`: Text positioning (topline, midline, botline, fill, left, right)
-- `display_config.mode`: Animation mode (30+ options: rotate, hold, flash, scroll, explode, newsflash, etc.)
-- `display_config.special_effect`: Visual effects (16+ options: twinkle, sparkle, snow, starburst, fireworks, etc.)
-- `display_config.color`: Text color (10+ options: red, green, amber, yellow, rainbow, autocolor, etc.)
-- `display_config.character_set`: Font style (5high, 7high, 10high, 7shadow, 7fancy, etc.)
+- `display_config.mode`: Animation mode (23 options: rotate, hold, flash, scroll, explode, rollup, rolldown, rollleft, rollright, wipeup, wipedown, wipeleft, wiperight, special, automode, rollin, rollout, wipein, wipeout, compressed_rotate, clock, etc.)
+- `display_config.special_effect`: Visual effects (21 options: twinkle, sparkle, snow, interlock, switch, slide, spray, starburst, welcome, slots, newsflash, trumpet, cyclecolors, thankyou, nosmoking, dontdrinkanddrive, fishimal, fireworks, turballoon, bomb, etc.)
+- `display_config.color`: Text color (12 options: red, green, amber, dimred, dimgreen, brown, orange, yellow, rainbow1, rainbow2, colormix, autocolor)
+- `display_config.character_set`: Font style (14 options: 5high, 5stroke, 7high, 7stroke, 7highfancy, 10high, 7shadow, fhighfancy, fhigh, 7shadowfancy, 5wide, 7wide, 7widefancy, 5widestroke)
 - `display_config.speed`: Animation speed (1-5, where 1=slowest, 5=fastest)
 - `display_config.flash`: Enable character flashing (true/false)
 - `display_config.priority`: Interrupt normal display rotation (true/false)
@@ -865,6 +865,75 @@ done
         "critical": "red",
         "warning": "amber", 
         "info": "green"
+      },
+      "betabrite_mappings": {
+        "display_modes": {
+          "rotate": "a", "hold": "b", "flash": "c", "rollup": "e", "rolldown": "f",
+          "rollleft": "g", "rollright": "h", "wipeup": "i", "wipedown": "j",
+          "wipeleft": "k", "wiperight": "l", "scroll": "m", "special": "n",
+          "automode": "o", "rollin": "p", "rollout": "q", "wipein": "r",
+          "wipeout": "s", "compressed_rotate": "t", "explode": "u", "clock": "v"
+        },
+        "special_effects": {
+          "twinkle": "0", "sparkle": "1", "snow": "2", "interlock": "3",
+          "switch": "4", "slide": "5", "spray": "6", "starburst": "7",
+          "welcome": "8", "slots": "9", "newsflash": "A", "trumpet": "B",
+          "cyclecolors": "C", "thankyou": "S", "nosmoking": "U",
+          "dontdrinkanddrive": "V", "fishimal": "W", "fireworks": "X",
+          "turballoon": "Y", "bomb": "Z"
+        },
+        "colors": {
+          "red": "1", "green": "2", "amber": "3", "dimred": "4",
+          "dimgreen": "5", "brown": "6", "orange": "7", "yellow": "8",
+          "rainbow1": "9", "rainbow2": "A", "colormix": "B", "autocolor": "C"
+        },
+        "character_sets": {
+          "5high": "1", "5stroke": "2", "7high": "3", "7stroke": "4",
+          "7highfancy": "5", "10high": "6", "7shadow": "7", "fhighfancy": "8",
+          "fhigh": "9", "7shadowfancy": ":", "5wide": ";", "7wide": "<",
+          "7widefancy": "=", "5widestroke": ">"
+        },
+        "positions": {
+          "midline": " ", "topline": "\"", "botline": "&", "fill": "0",
+          "left": "1", "right": "2"
+        }
+      },
+      "alert_level_presets": {
+        "critical": {
+          "mode": "explode", "special_effect": "bomb", "color": "red",
+          "character_set": "10high", "position": "fill", "speed": 5,
+          "priority": true, "flash": true
+        },
+        "warning": {
+          "mode": "newsflash", "special_effect": "trumpet", "color": "amber",
+          "character_set": "7high", "position": "topline", "speed": 3
+        },
+        "info": {
+          "mode": "scroll", "special_effect": "twinkle", "color": "green",
+          "character_set": "7high", "position": "midline", "speed": 2
+        },
+        "debug": {
+          "mode": "hold", "special_effect": "none", "color": "dimgreen",
+          "character_set": "5high", "position": "botline", "speed": 1
+        }
+      },
+      "category_themes": {
+        "security": {
+          "effects": ["starburst", "bomb", "newsflash"],
+          "modes": ["flash", "explode"], "colors": ["red", "amber"]
+        },
+        "weather": {
+          "effects": ["snow", "spray", "twinkle"],
+          "modes": ["scroll", "wipedown"], "colors": ["amber", "yellow", "autocolor"]
+        },
+        "system": {
+          "effects": ["sparkle", "cyclecolors"],
+          "modes": ["rotate", "compressed_rotate"], "colors": ["green", "amber", "red"]
+        },
+        "celebration": {
+          "effects": ["fireworks", "welcome", "thankyou"],
+          "modes": ["explode", "rollin"], "colors": ["rainbow1", "colormix"]
+        }
       }
     },
     "smart_lights": {
