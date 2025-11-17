@@ -292,24 +292,86 @@ The BetaBrite library integrates seamlessly with the centralized Alert Router Se
 
 ### Alert Router to BetaBrite Mapping
 
-#### JSON Alert Message Format
+#### Standardized JSON Alert Message Format
+
+**Basic Alert with LED Configuration**:
 ```json
 {
-  "timestamp": "2024-01-15T10:30:00Z",
+  "timestamp": 1704045600,
   "level": "critical",
   "category": "security",
   "title": "Motion Detected",
   "message": "Front door motion sensor triggered",
-  "source": "security_system",
-  "display_config": {
-    "position": "fill",
-    "mode": "explode", 
-    "special_effect": "bomb",
-    "color": "red",
-    "character_set": "10high",
-    "speed": 5,
-    "priority": true,
-    "duration": 30
+  "source": {
+    "id": "security-system-01",
+    "type": "security_service",
+    "metadata": {
+      "location": "front_door",
+      "device_id": "motion_01"
+    }
+  },
+  "pathway_config": {
+    "led_security": {
+      "zones": {
+        "main": {
+          "display_config": {
+            "mode": "explode",
+            "special_effect": "bomb",
+            "color": "red",
+            "character_set": "10high",
+            "speed": 5,
+            "priority": true,
+            "duration": 30
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**Multi-Zone LED Alert Configuration**:
+```json
+{
+  "timestamp": 1704045600,
+  "level": "warning",
+  "category": "system",
+  "title": "Server Status Alert",
+  "message": "High CPU usage detected on production server",
+  "source": {
+    "id": "monitoring-service",
+    "type": "monitoring",
+    "metadata": {
+      "server": "prod-01",
+      "cpu_usage": "85%"
+    }
+  },
+  "metadata": {
+    "led_zones": ["office", "server_room"]
+  },
+  "pathway_config": {
+    "led_status": {
+      "zones": {
+        "office": {
+          "display_config": {
+            "mode": "scroll",
+            "color": "amber",
+            "character_set": "7high",
+            "speed": 3
+          }
+        },
+        "server_room": {
+          "display_config": {
+            "mode": "flash",
+            "special_effect": "starburst",
+            "color": "red",
+            "character_set": "10high",
+            "speed": 4,
+            "priority": true
+          }
+        }
+      }
+    }
   }
 }
 ```
