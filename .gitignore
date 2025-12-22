@@ -4,3 +4,14 @@
 .vscode/launch.json
 .vscode/ipch
 .claude/settings.local.json
+
+# Certificates and secrets - NEVER commit these
+data/certs/
+docs/ledbb01-bundle/
+*.crt
+*.key
+*.pem
+*.p12
+**/certs/
+github_token.txt
+Credentials.h.bak
