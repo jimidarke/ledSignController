@@ -218,7 +218,13 @@ public:
      * @brief Force reconnection attempt (resets backoff)
      */
     void forceReconnect();
-    
+
+    /**
+     * @brief Get the underlying PubSubClient instance
+     * @return Pointer to PubSubClient (for HADiscovery integration)
+     */
+    PubSubClient* getClient() const { return mqtt_client; }
+
     // Static instance pointer for callback routing
     static MQTTManager* instance;
 };

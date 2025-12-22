@@ -34,6 +34,7 @@
 #include "MQTTManager.h"
 #include "SignController.h"
 #include "GitHubOTA.h"
+#include "HADiscovery.h"
 
 // Third-party libraries
 #include <ArduinoJson.h>
@@ -77,6 +78,7 @@ BETABRITE led_sign(1, 16, 17);                  ///< BetaBrite sign interface (I
 MQTTManager* mqtt_manager = nullptr;             ///< MQTT connection manager
 SignController* sign_controller = nullptr;       ///< LED sign control interface
 GitHubOTA* ota_manager = nullptr;                ///< GitHub-based OTA update manager
+HADiscovery* ha_discovery = nullptr;             ///< Home Assistant MQTT Discovery
 
 // WiFiManager custom parameters (linked to dynamicParams.h variables)
 WiFiManagerParameter custom_mqtt_server("server", "MQTT Server", MQTT_Server, MAX_MQTT_SERVER_LEN);
@@ -241,19 +243,55 @@ void loop() {
             // Handle MQTT communication
             if (mqtt_manager) {
                 mqtt_manager->loop();
+
+                // Home Assistant Discovery - publish when MQTT connects
+                static bool ha_discovery_published = false;
+                static unsigned long last_ha_sensor_update = 0;
+
+                if (mqtt_manager->isConnected()) {
+                    // Publish discovery on first connection
+                    if (!ha_discovery_published && ha_discovery) {
+                        Serial.println("MQTT connected - publishing HA Discovery...");
+
+                        // Update availability to online
+                        ha_discovery->updateAvailability(true);
+
+                        // Publish discovery messages
+                        if (ha_discovery->publishDiscovery()) {
+                            // Subscribe to command topics
+                            ha_discovery->subscribeToCommands();
+                            ha_discovery_published = true;
+                            Serial.println("HA Discovery published successfully");
+                        }
+                    }
+
+                    // Update HA sensors periodically (every 60 seconds)
+                    if (ha_discovery && (current_time - last_ha_sensor_update > 60000)) {
+                        ha_discovery->updateSensors(
+                            WiFi.RSSI(),
+                            millis() / 1000,
+                            WiFi.localIP().toString(),
+                            ESP.getFreeHeap()
+                        );
+                        last_ha_sensor_update = current_time;
+                    }
+                } else {
+                    // Reset discovery flag when disconnected so it republishes on reconnect
+                    ha_discovery_published = false;
+                }
             }
 
             // Handle OTA updates (periodic checks for new firmware)
             if (ota_manager) {
                 ota_manager->loop();
             }
-            
+
             // Perform periodic health checks
             if (current_time - last_health_check > HEALTH_CHECK_INTERVAL) {
                 performHealthCheck();
                 last_health_check = current_time;
             }
-            
+
             // Periodic time synchronization
             if (current_time - last_time_sync > TIME_SYNC_INTERVAL) {
                 syncTime();
@@ -438,6 +476,54 @@ void initializeNetworkServices() {
 
                     if (mqtt_manager->begin()) {
                         Serial.println("MQTT manager initialized successfully");
+
+                        // Initialize Home Assistant Discovery
+                        Serial.println("Initializing Home Assistant Discovery...");
+                        ha_discovery = new HADiscovery(
+                            mqtt_manager->getClient(),
+                            device_id,
+                            "LED Sign",
+                            Zone_Name
+                        );
+
+                        if (ha_discovery) {
+                            // Set up callbacks for HA commands
+                            ha_discovery->setMessageCallback([](const String& message) {
+                                Serial.print("HA: Display message: ");
+                                Serial.println(message);
+                                if (sign_controller) {
+                                    // Use priority message for HA commands (30 second display)
+                                    sign_controller->displayPriorityMessage(message.c_str(), 30);
+                                }
+                            });
+
+                            ha_discovery->setEffectCallback([](const String& effect) {
+                                Serial.print("HA: Effect changed to: ");
+                                Serial.println(effect);
+                                // Effect will be applied on next message
+                            });
+
+                            ha_discovery->setColorCallback([](const String& color) {
+                                Serial.print("HA: Color changed to: ");
+                                Serial.println(color);
+                                // Color will be applied on next message
+                            });
+
+                            ha_discovery->setClearCallback([]() {
+                                Serial.println("HA: Clear display requested");
+                                if (sign_controller) {
+                                    sign_controller->clearAllFiles();
+                                }
+                            });
+
+                            ha_discovery->setRebootCallback([]() {
+                                Serial.println("HA: Reboot requested");
+                                delay(1000);
+                                ESP.restart();
+                            });
+
+                            Serial.println("Home Assistant Discovery initialized");
+                        }
                     } else {
                         Serial.println("Warning: MQTT manager initialization failed");
                     }
@@ -448,7 +534,7 @@ void initializeNetworkServices() {
                 Serial.println("Info: MQTT not configured - check WiFi portal");
             }
         }
-        
+
         // Initialize GitHub OTA manager
         Serial.println("Initializing OTA update manager...");
         ota_manager = new GitHubOTA(GITHUB_REPO_OWNER, GITHUB_REPO_NAME, &led_sign);
@@ -632,6 +718,11 @@ void handleMQTTMessage(char* topic, uint8_t* payload, unsigned int length) {
     if (!topic || !payload || length == 0) {
         Serial.println("MQTT: Invalid message parameters");
         return;
+    }
+
+    // Check if HADiscovery should handle this message (command topics)
+    if (ha_discovery && ha_discovery->handleMessage(topic, payload, length)) {
+        return;  // Message handled by HADiscovery
     }
 
     // Log received message
