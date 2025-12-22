@@ -421,10 +421,9 @@ void initializeNetworkServices() {
                 strcpy(mqtt_pass, MQTT_Pass);
 
                 // Determine if TLS should be used based on port
-                // Ports 42690 (production) or 46942 (development) = TLS
-                // Port 1883 = basic MQTT (fallback)
-                bool use_tls = (mqtt_port == MQTT_TLS_PORT_PRODUCTION ||
-                               mqtt_port == MQTT_TLS_PORT_DEVELOPMENT);
+                // Port 8883 = standard TLS MQTT (server-only TLS + username/password)
+                // Port 1883 = basic MQTT (not recommended, fallback only)
+                bool use_tls = (mqtt_port != MQTT_BASIC_PORT);
 
                 Serial.print("MQTT Configuration - Server: ");
                 Serial.print(mqtt_server);

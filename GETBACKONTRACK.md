@@ -1,7 +1,7 @@
 # LED Sign Controller - Get Back On Track Summary
 
 **Date:** 2025-12-22
-**Version:** 0.2.0
+**Version:** 0.2.1
 **Status:** Reorganization Complete - Ready for Hardware Testing
 
 ---
@@ -37,6 +37,21 @@
 | MOVED | `CLIENTNODE.md` → `docs/external-services/ALERT_MANAGER_CLIENT_REFERENCE.md` |
 | DELETED | `docs/DEV_GUIDE.md` (redundant with README.md) |
 | DELETED | `src/README.md` (minimal, redundant with BETABRITE.md) |
+
+### Phase 4: MQTT Security Simplification (v0.2.1)
+| Change | Description |
+|--------|-------------|
+| **Architecture** | Server-only TLS + username/password (instead of mTLS) |
+| **Port** | 8883 (standard TLS MQTT) instead of custom 42690 |
+| **CA Cert Only** | No client.crt or client.key needed |
+| **WiFiManager** | Username/password configured via web portal |
+| **Docs** | `docs/MQTT_SECURITY.md` - full server setup guide |
+
+**Why Server-Only TLS?**
+- Simpler: Only CA cert needed on ESP32
+- Easier rotation: Change password without reflashing
+- Less memory: ~50% less heap usage
+- Same security: TLS 1.2 encryption + username/password auth + topic ACLs
 
 ---
 

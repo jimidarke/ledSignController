@@ -1,16 +1,23 @@
 /**
  * @file MQTTManager.h
  * @brief MQTT connection and message handling for LED Sign Controller
- * 
+ *
  * This module manages all MQTT-related functionality including:
+ * - Server-only TLS: CA cert validates broker, username/password authenticates device
  * - Connection management with exponential backoff
  * - Message subscription and publishing
  * - Telemetry data transmission
  * - Connection health monitoring
  * - Graceful error recovery
- * 
+ *
+ * Security Model:
+ * - TLS 1.2 encryption (standard port 8883)
+ * - Server certificate validation via CA cert (data/certs/ca.crt)
+ * - Device authentication via MQTT username/password
+ * - Optional mTLS if client.crt and client.key are present
+ *
  * @author LED Sign Controller Project
- * @version 0.1.4
+ * @version 0.2.1
  * @date 2024
  */
 
@@ -132,13 +139,13 @@ public:
     /**
      * @brief Configure MQTT connection parameters
      * @param server MQTT server hostname/IP
-     * @param port MQTT server port (default: 42690 for TLS)
-     * @param username MQTT username (can be empty)
-     * @param password MQTT password (can be empty)
+     * @param port MQTT server port (default: 8883 for TLS)
+     * @param username MQTT username (required for server-only TLS auth)
+     * @param password MQTT password (required for server-only TLS auth)
      * @param use_tls Whether to use TLS (default: true)
      * @return true if configuration is valid, false otherwise
      */
-    bool configure(const char* server, uint16_t port = 42690,
+    bool configure(const char* server, uint16_t port = 8883,
                    const char* username = "", const char* password = "",
                    bool use_tls = true);
     

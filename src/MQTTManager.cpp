@@ -17,7 +17,7 @@ MQTTManager::MQTTManager(WiFiClient* wifi_client, const String& device_id, const
 
     // Initialize connection parameters
     memset(mqtt_server, 0, sizeof(mqtt_server));
-    mqtt_port = 42690;  // Default TLS port per ESP32_BETABRITE_IMPLEMENTATION.md
+    mqtt_port = 8883;  // Standard TLS MQTT port (server-only TLS + username/password auth)
     memset(mqtt_user, 0, sizeof(mqtt_user));
     memset(mqtt_pass, 0, sizeof(mqtt_pass));
 

@@ -43,10 +43,10 @@
 #define MQTT_QOS_LEVEL            1       // At least once delivery
 #define MQTT_CLEAN_SESSION        false   // Persistent session for reliability
 
-// TLS MQTT Ports (per ESP32_BETABRITE_IMPLEMENTATION.md)
-#define MQTT_TLS_PORT_PRODUCTION  42690   // Production TLS port
-#define MQTT_TLS_PORT_DEVELOPMENT 46942   // Development TLS port
-#define MQTT_BASIC_PORT           1883    // Fallback non-TLS port
+// MQTT Port Configuration
+// Server-only TLS: ESP32 validates broker with CA cert, authenticates with username/password
+#define MQTT_TLS_PORT             8883    // Standard TLS MQTT port
+#define MQTT_BASIC_PORT           1883    // Fallback non-TLS port (not recommended)
 
 // Certificate paths for TLS authentication (stored in LittleFS)
 #define CERT_PATH_CA              "/certs/ca.crt"
@@ -93,7 +93,7 @@
 /////////////////////////////////////////////
 
 // Current firmware version (semantic versioning)
-#define FIRMWARE_VERSION          "0.2.0"
+#define FIRMWARE_VERSION          "0.2.1"
 
 // GitHub Repository Configuration
 // TODO: Update these with your actual GitHub username and repository name

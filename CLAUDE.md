@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Architecture (v0.2.0)
+## Project Architecture (v0.2.1)
 
 This is an ESP32-based LED sign controller that connects BetaBrite/Alpha Protocol LED signs to WiFi and secure MQTT for **Alert Manager integration**. The system receives JSON-formatted alert messages with automatic display formatting based on severity level and category. Built using PlatformIO with the Arduino framework.
 
@@ -10,26 +10,25 @@ This is an ESP32-based LED sign controller that connects BetaBrite/Alpha Protoco
 
 - **Main Controller** (`src/main.cpp`): JSON alert parsing, intelligent display presets, non-blocking priority message handling
 - **BETABRITE Library** (`lib/BETABRITE/`): Custom library for BetaBrite Alpha Protocol over RS232/TTL serial
-- **MQTTManager** (`src/MQTTManager.h/.cpp`): TLS-enabled MQTT client with certificate-based authentication and zone-based routing
+- **MQTTManager** (`src/MQTTManager.h/.cpp`): TLS-enabled MQTT client with username/password authentication and zone-based routing
 - **SignController** (`src/SignController.h/.cpp`): LED sign control with full protocol access (charset, speed, effects)
-- **WiFi Management** (`ESP_WiFiManager_Lite`): WiFi configuration portal with zone name parameter
-- **Certificate Storage** (`data/certs/`): SPIFFS-based TLS certificate management (ca.crt, client.crt, client.key)
+- **WiFi Management** (`tzapu/WiFiManager`): WiFi configuration portal with MQTT credentials and zone name
+- **Certificate Storage** (`data/certs/`): LittleFS-based CA certificate storage (only ca.crt needed)
 - **OTA Updates** (`lib/GitHubOTA/`): GitHub Releases-based over-the-air firmware updates with HTTPS and SHA256 verification
 
-### Key Features (v0.2.0)
+### Key Features (v0.2.1)
 
 - **JSON Message Format**: Alert Manager compatible structured messages with `level`, `category`, `title`, `message`, and optional `display_config`
 - **Intelligent Display Presets**: Automatic formatting based on alert level (critical/warning/notice/info) and category (security/weather/automation/system/network/personal)
 - **Priority Messages**: Non-blocking critical alerts with configurable duration that interrupt normal operation
 - **Full Protocol Control**: Access to all BetaBrite features including charset (font size), speed codes, positioning, colors, modes, and special effects
 - **Zone-Based Routing**: Multi-sign deployments with topic `ledSign/{zone}/message` for targeted delivery
-- **Mutual TLS Authentication**: Certificate-based client authentication on port 42690 (production) or 46942 (development)
+- **Server-Only TLS Authentication**: CA cert validates broker, username/password authenticates device (port 8883)
 - **Persistent MQTT Sessions**: QoS Level 1 with clean session = false for reliable message delivery
-- **Graceful Fallback**: Automatic fallback to insecure MQTT (port 1883) if certificates fail to load
+- **Graceful Fallback**: Automatic fallback to insecure MQTT (port 1883) if CA cert fails to load
 - **Clock Display**: Automatic time display with NTP synchronization
-- **Configuration Portal**: Web-based setup accessible when device is offline
-- **Telemetry**: Publishes RSSI, IP address, and uptime via MQTT
-- **Multi-Reset Detection**: Factory reset capability via multiple device resets
+- **Configuration Portal**: Web-based setup for WiFi, MQTT credentials, and zone configuration
+- **Telemetry**: Publishes RSSI, IP address, uptime, and free memory via MQTT
 - **Secure OTA Updates**: GitHub Releases integration with HTTPS downloads, SHA256 checksum verification, semantic versioning, and automatic periodic checks
 
 ### Message Format (JSON Only - v0.2.0+)
@@ -113,37 +112,40 @@ pio run -t clean           # Clean build files
 - WiFi connectivity required for MQTT operations
 
 ### Key Configuration Files
-- `platformio.ini`: PlatformIO project configuration with SPIFFS filesystem and OTA-compatible partition scheme
-- `src/defines.h`: Sign controller defines, TLS ports (42690/46942), certificate paths, zone defaults, OTA configuration (GitHub repo, version, check interval)
-- `include/Credentials.h`: WiFi and server credentials (not in repo)
-- `include/dynamicParams.h`: MQTT configuration parameters including Zone_Name
-- `data/certs/ca.crt`: Certificate Authority root certificate (not in repo)
-- `data/certs/client.crt`: Device-specific client certificate (not in repo)
-- `data/certs/client.key`: Private key for client certificate (not in repo, **KEEP SECURE**)
+- `platformio.ini`: PlatformIO project configuration with LittleFS filesystem and OTA-compatible partition scheme
+- `src/defines.h`: Sign controller defines, TLS port (8883), certificate paths, zone defaults, OTA configuration
+- `include/Credentials.h`: Placeholder (credentials managed by WiFiManager)
+- `include/dynamicParams.h`: MQTT configuration parameters (server, port, user, pass, zone)
+- `data/certs/ca.crt`: Certificate Authority root certificate (validates broker identity)
 - `data/github_token.txt`: GitHub Personal Access Token for private repo OTA updates (not in repo, **KEEP SECURE**)
 
-### Default Settings (v0.2.0)
+### Default Settings (v0.2.1)
 - WiFi AP: "LEDSign" / "ledsign0"
 - Serial: 115200 baud
 - MQTT Server: alert.d-t.pw
-- MQTT Port: 42690 (TLS production), 46942 (TLS development), 1883 (insecure fallback)
+- MQTT Port: 8883 (TLS with username/password), 1883 (insecure fallback)
+- MQTT Auth: Username/password (configured via WiFiManager portal)
 - MQTT QoS: Level 1 (at least once delivery)
 - MQTT Packet Size: 2048 bytes (increased for JSON payloads)
 - Time Zone: Mountain Time (MST7MDT)
 - Sign Files: Maximum 5 text files (A-E)
 - Default Zone: "default"
-- Firmware Version: 0.2.0 (defined in `defines.h`)
+- Firmware Version: 0.2.1 (defined in `defines.h`)
 - OTA Check Interval: 24 hours (configurable in `defines.h`)
 - OTA Auto-Update: Enabled by default
 
-### Certificate Management (v0.2.0)
+### MQTT Security (v0.2.1)
+
+**Security Model**: Server-only TLS + Username/Password
+- ESP32 validates broker identity via CA certificate
+- Device authenticates with username/password (configured via WiFiManager)
+- Topic ACLs on broker enforce zone-based permissions
+- See `docs/MQTT_SECURITY.md` for full architecture and server setup
 
 **Installation**:
 ```bash
-# Place certificates in data/certs/
+# Only CA certificate needed (no client cert/key)
 cp /path/to/ca.crt data/certs/
-cp /path/to/client.crt data/certs/
-cp /path/to/client.key data/certs/
 
 # Upload filesystem to ESP32
 pio run -t uploadfs
@@ -151,19 +153,16 @@ pio run -t uploadfs
 
 **Verification** (via serial monitor):
 ```
-MQTTManager: SPIFFS mounted successfully
-MQTTManager: Loaded 1234 bytes from /certs/ca.crt
-MQTTManager: Loaded 1234 bytes from /certs/client.crt
-MQTTManager: Loaded 1234 bytes from /certs/client.key
-MQTTManager: All certificates configured successfully
+MQTTManager: LittleFS mounted successfully
+MQTTManager: CA certificate loaded (2048 bytes)
+MQTTManager: Server verification ready (username/password auth)
+MQTTManager: Connected to alert.d-t.pw:8883
 ```
 
 **Fallback Behavior**:
-- If certificates fail to load, system falls back to insecure MQTT on port 1883
+- If CA cert fails to load, system falls back to insecure MQTT on port 1883
 - Warning message: "MQTTManager: Warning - Certificate loading failed"
 - Production Alert Manager requires TLS - insecure mode for testing only
-
-See `data/certs/README.md` for detailed certificate installation instructions.
 
 ### OTA Update Management (v0.2.0)
 
