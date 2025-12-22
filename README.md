@@ -2,7 +2,7 @@
 
 A comprehensive ESP32-based controller for BetaBrite/Alpha Protocol LED signs with WiFi connectivity, secure MQTT integration, and Alert Manager support for centralized notification management.
 
-![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)
+![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-ESP32-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-yellow.svg)
 ![Build](https://img.shields.io/badge/build-PlatformIO-orange.svg)
@@ -83,12 +83,14 @@ A comprehensive ESP32-based controller for BetaBrite/Alpha Protocol LED signs wi
    #define GITHUB_REPO_NAME          "ledSignController"
    ```
 
-4. **Install TLS certificates** (required for production)
+4. **Install TLS certificate** (required for production)
    ```bash
-   # Place certificates in data/certs/
-   cp /path/to/ca.crt data/certs/
-   cp /path/to/client.crt data/certs/
-   cp /path/to/client.key data/certs/
+   # Extract CA certificate from broker (or copy your ca.crt)
+   openssl s_client -connect alert.d-t.pw:42690 -showcerts </dev/null 2>/dev/null | \
+     awk '/BEGIN CERT/,/END CERT/ {print}' | tail -n +24 > data/certs/ca.crt
+
+   # Validate with test script
+   ./tools/test-mqtt-auth.sh
 
    # Upload filesystem to ESP32
    pio run -t uploadfs

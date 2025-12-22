@@ -45,7 +45,7 @@
 
 // MQTT Port Configuration
 // Server-only TLS: ESP32 validates broker with CA cert, authenticates with username/password
-#define MQTT_TLS_PORT             8883    // Standard TLS MQTT port
+#define MQTT_TLS_PORT             42690   // Alert Manager TLS MQTT port
 #define MQTT_BASIC_PORT           1883    // Fallback non-TLS port (not recommended)
 
 // Certificate paths for TLS authentication (stored in LittleFS)
@@ -93,7 +93,7 @@
 /////////////////////////////////////////////
 
 // Current firmware version (semantic versioning)
-#define FIRMWARE_VERSION          "0.2.1"
+#define FIRMWARE_VERSION          "0.3.0"
 
 // GitHub Repository Configuration
 // TODO: Update these with your actual GitHub username and repository name
