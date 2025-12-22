@@ -31,14 +31,14 @@
 #include <time.h>
 
 // Project modules
-// #include "MessageParser.h"  // DEPRECATED: No longer used after JSON-only implementation
 #include "MQTTManager.h"
 #include "SignController.h"
-#include "GitHubOTA.h"  // GitHub-based OTA updates with HTTPS and checksum verification
+#include "GitHubOTA.h"
 
 // Third-party libraries
 #include <ArduinoJson.h>
-#include <SPIFFS.h>  // For loading GitHub token from filesystem
+#include <LittleFS.h>      // For loading certificates and GitHub token
+#include <WiFiManager.h>   // tzapu/WiFiManager for configuration portal
 
 /**
  * @brief Application version and build information
@@ -72,11 +72,18 @@ const char* ntp_server = "pool.ntp.org";
  * @brief Global object instances
  */
 WiFiClient wifi_client;                          ///< WiFi client for network operations
-ESP_WiFiManager_Lite* wifi_manager = nullptr;   ///< WiFi configuration manager
-BETABRITE led_sign(1, 16, 17);                 ///< BetaBrite sign interface (ID=1, RX=16, TX=17)
+WiFiManager wifiManager;                         ///< WiFi configuration manager (tzapu/WiFiManager)
+BETABRITE led_sign(1, 16, 17);                  ///< BetaBrite sign interface (ID=1, RX=16, TX=17)
 MQTTManager* mqtt_manager = nullptr;             ///< MQTT connection manager
 SignController* sign_controller = nullptr;       ///< LED sign control interface
 GitHubOTA* ota_manager = nullptr;                ///< GitHub-based OTA update manager
+
+// WiFiManager custom parameters (linked to dynamicParams.h variables)
+WiFiManagerParameter custom_mqtt_server("server", "MQTT Server", MQTT_Server, MAX_MQTT_SERVER_LEN);
+WiFiManagerParameter custom_mqtt_port("port", "MQTT Port", MQTT_Port, MAX_MQTT_PORT_LEN);
+WiFiManagerParameter custom_mqtt_user("user", "MQTT User (optional)", MQTT_User, MAX_MQTT_USER_LEN);
+WiFiManagerParameter custom_mqtt_pass("pass", "MQTT Pass (optional)", MQTT_Pass, MAX_MQTT_PASS_LEN);
+WiFiManagerParameter custom_zone_name("zone", "Sign Zone", Zone_Name, MAX_ZONE_NAME_LEN);
 
 /**
  * @brief Application state variables
@@ -108,20 +115,7 @@ const unsigned long CLOCK_DISPLAY_INTERVAL = 60000;
 const unsigned long WIFI_CHECK_INTERVAL = 30000;
 const unsigned long MEMORY_REPORT_INTERVAL = 60000;
 
-/**
- * @brief Custom CSS styling for WiFi configuration portal
- */
-#if USING_CUSTOMS_STYLE
-const char NewCustomsStyle[] PROGMEM = 
-    "<style>"
-    "div,input{padding:5px;font-size:1em;}"
-    "input{width:95%;}"
-    "body{text-align: center;font-family: Arial, sans-serif;}"
-    "button{background-color:#007bff;color:white;line-height:2.4rem;font-size:1.2rem;width:100%;border:none;border-radius:4px;}"
-    "fieldset{border-radius:0.3rem;margin:0px;border: 1px solid #ddd;}"
-    ".header{background-color:#343a40;color:white;padding:10px;margin-bottom:20px;}"
-    "</style>";
-#endif
+// WiFiManager uses built-in styling - no custom CSS needed
 
 /**
  * @brief Function declarations
@@ -188,9 +182,15 @@ void loop() {
     static unsigned long last_clock_display = 0;
     unsigned long current_time = millis();
     
-    // Always run WiFi manager
-    if (wifi_manager) {
-        wifi_manager->run();
+    // WiFiManager handles reconnection automatically - no run() needed
+    // Check if WiFi disconnected and attempt reconnection
+    if (WiFi.status() != WL_CONNECTED) {
+        static unsigned long last_reconnect_attempt = 0;
+        if (current_time - last_reconnect_attempt > 30000) {
+            Serial.println("WiFi disconnected, attempting reconnection...");
+            WiFi.reconnect();
+            last_reconnect_attempt = current_time;
+        }
     }
     
     // Periodic WiFi status monitoring
@@ -317,30 +317,43 @@ void initializeDevice() {
         // Continue anyway - sign might be temporarily disconnected
     }
     
-    // Initialize WiFi manager
+    // Initialize WiFi manager (tzapu/WiFiManager)
     Serial.println("Initializing WiFi manager...");
-    wifi_manager = new ESP_WiFiManager_Lite();
-    
-    if (wifi_manager) {
-        // Configure WiFi manager settings
-        wifi_manager->setConfigPortalChannel(0);
-        wifi_manager->setConfigPortalIP(IPAddress(192, 168, 50, 1));
-        wifi_manager->setConfigPortal("LEDSign", "ledsign0");
-        
-        #if USING_CUSTOMS_STYLE
-        wifi_manager->setCustomsStyle(NewCustomsStyle);
-        #endif
-        
-        #if USING_CUSTOMS_HEAD_ELEMENT
-        wifi_manager->setCustomsHeadElement(PSTR("<style>html{filter: invert(10%);}</style>"));
-        #endif
-        
-        // Start WiFi manager
-        wifi_manager->begin("LEDSign");
-        Serial.println("WiFi manager initialized successfully");
-    } else {
-        Serial.println("Error: Failed to create WiFi manager");
+
+    // Add custom parameters
+    wifiManager.addParameter(&custom_mqtt_server);
+    wifiManager.addParameter(&custom_mqtt_port);
+    wifiManager.addParameter(&custom_mqtt_user);
+    wifiManager.addParameter(&custom_mqtt_pass);
+    wifiManager.addParameter(&custom_zone_name);
+
+    // Configure WiFi manager
+    wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
+    wifiManager.setConnectTimeout(WIFI_CONNECT_TIMEOUT);
+    wifiManager.setDebugOutput(true);
+
+    // Set hostname
+    WiFi.setHostname(HOST_NAME);
+
+    // Auto-connect - will start config portal if no saved credentials
+    // This blocks until WiFi is connected or portal times out
+    Serial.println("Connecting to WiFi (or starting config portal)...");
+    if (!wifiManager.autoConnect(SIGN_DEFAULT_SSID, SIGN_DEFAULT_PASS)) {
+        Serial.println("WiFi connection failed - restarting in 3 seconds...");
+        delay(3000);
+        ESP.restart();
     }
+
+    // Copy parameter values after portal (user may have updated them)
+    strcpy(MQTT_Server, custom_mqtt_server.getValue());
+    strcpy(MQTT_Port, custom_mqtt_port.getValue());
+    strcpy(MQTT_User, custom_mqtt_user.getValue());
+    strcpy(MQTT_Pass, custom_mqtt_pass.getValue());
+    strcpy(Zone_Name, custom_zone_name.getValue());
+
+    Serial.println("WiFi connected successfully!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
     
     // Initialize random number generator
     // Note: Cannot use analogRead(0) - GPIO0 is on ADC2 which conflicts with WiFi
@@ -386,27 +399,26 @@ void initializeNetworkServices() {
         // Initialize MQTT manager with zone name (per ESP32_BETABRITE_IMPLEMENTATION.md)
         Serial.println("Initializing MQTT manager...");
 
-        // Extract zone name from configuration (myMenuItems[4])
-        String zone_name = String(myMenuItems[4].pdata);
+        // Get zone name from configuration
+        String zone_name = String(Zone_Name);
         if (zone_name.length() == 0) {
-            zone_name = SIGN_DEFAULT_ZONE;  // Fallback to default zone
+            zone_name = SIGN_DEFAULT_ZONE;
             Serial.print("Using default zone: ");
-            Serial.println(zone_name);
         } else {
             Serial.print("Using configured zone: ");
-            Serial.println(zone_name);
         }
+        Serial.println(zone_name);
 
         mqtt_manager = new MQTTManager(&wifi_client, device_id, zone_name);
 
         if (mqtt_manager) {
             // Configure MQTT from stored parameters
-            if (strlen(myMenuItems[0].pdata) > 0) {
-                // Extract MQTT configuration from WiFiManager data
-                strcpy(mqtt_server, myMenuItems[0].pdata);
-                mqtt_port = atoi(myMenuItems[1].pdata);
-                strcpy(mqtt_user, myMenuItems[2].pdata);
-                strcpy(mqtt_pass, myMenuItems[3].pdata);
+            if (strlen(MQTT_Server) > 0) {
+                // Use global configuration variables
+                strcpy(mqtt_server, MQTT_Server);
+                mqtt_port = atoi(MQTT_Port);
+                strcpy(mqtt_user, MQTT_User);
+                strcpy(mqtt_pass, MQTT_Pass);
 
                 // Determine if TLS should be used based on port
                 // Ports 42690 (production) or 46942 (development) = TLS
@@ -445,11 +457,11 @@ void initializeNetworkServices() {
         if (ota_manager) {
             ota_manager->begin(APP_VERSION);
 
-            // Load GitHub token from SPIFFS (if available)
-            if (SPIFFS.begin(true)) {
-                Serial.println("OTA: SPIFFS mounted successfully");
+            // Load GitHub token from LittleFS (if available)
+            if (LittleFS.begin(true)) {
+                Serial.println("OTA: LittleFS mounted successfully");
 
-                File tokenFile = SPIFFS.open(GITHUB_TOKEN_PATH, "r");
+                File tokenFile = LittleFS.open(GITHUB_TOKEN_PATH, "r");
                 if (tokenFile) {
                     String token = tokenFile.readStringUntil('\n');
                     token.trim();  // Remove whitespace/newlines
@@ -466,7 +478,7 @@ void initializeNetworkServices() {
                     Serial.println("OTA: To use private repos, upload token to SPIFFS at: " GITHUB_TOKEN_PATH);
                 }
             } else {
-                Serial.println("OTA: Warning - SPIFFS mount failed, cannot load GitHub token");
+                Serial.println("OTA: Warning - LittleFS mount failed, cannot load GitHub token");
             }
 
             // Configure OTA settings from defines.h
@@ -882,29 +894,18 @@ void handleSystemReset() {
     Serial.println("Clearing all configuration data...");
     Serial.println("========================================");
     
-    // Clear WiFi configuration
-    if (wifi_manager) {
-        wifi_manager->clearConfigData();
-    }
-    
-    // Clear any saved preferences
-    // TODO: Add preferences clearing when implemented
-    
+    // Clear WiFi configuration (tzapu/WiFiManager)
+    wifiManager.resetSettings();
+
     // Display reset message on sign
     if (sign_controller) {
         sign_controller->displayPriorityMessage("Factory Reset");
     }
-    
+
     delay(3000); // Give user time to see message
-    
+
     Serial.println("Restarting device...");
-    
-    // Reset and enter configuration portal
-    if (wifi_manager) {
-        wifi_manager->resetAndEnterConfigPortal();
-    } else {
-        ESP.restart();
-    }
+    ESP.restart();
 }
 
 /**
@@ -917,26 +918,23 @@ void handleSystemReset() {
  */
 void smartDelay(unsigned long delay_ms) {
     unsigned long start_time = millis();
-    
+
     while (millis() - start_time < delay_ms) {
-        // Service WiFi manager
-        if (wifi_manager) {
-            wifi_manager->run();
-        }
-        
+        // tzapu/WiFiManager handles WiFi internally - no run() needed
+
         // Service MQTT if connected
         if (mqtt_manager && services_initialized) {
             mqtt_manager->loop();
         }
-        
+
         // Service sign controller
         if (sign_controller) {
             sign_controller->loop();
         }
-        
+
         // Small delay to prevent excessive CPU usage
         delay(1);
-        
+
         // Yield to other tasks
         yield();
     }

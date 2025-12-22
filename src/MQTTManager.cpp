@@ -113,7 +113,7 @@ bool MQTTManager::configure(const char* server, uint16_t port,
             wifi_client_secure = new WiFiClientSecure();
         }
 
-        // Load certificates from SPIFFS
+        // Load certificates from LittleFS
         if (loadCertificates()) {
             Serial.println("MQTTManager: Certificates loaded successfully");
             certificates_loaded = true;
@@ -190,7 +190,7 @@ void MQTTManager::resetConnectionState() {
 }
 
 String MQTTManager::loadCertificateFile(const char* path) {
-    File file = SPIFFS.open(path, "r");
+    File file = LittleFS.open(path, "r");
     if (!file) {
         Serial.print("MQTTManager: Warning - File not found: ");
         Serial.println(path);
@@ -217,24 +217,24 @@ String MQTTManager::loadCertificateFile(const char* path) {
 }
 
 bool MQTTManager::loadCertificates() {
-    // Initialize SPIFFS if not already initialized
+    // Initialize LittleFS if not already initialized
     // Try mounting WITHOUT auto-format first to preserve uploaded files
-    if (!SPIFFS.begin(false)) {
-        Serial.println("MQTTManager: Error - Failed to mount SPIFFS (no auto-format)");
+    if (!LittleFS.begin(false)) {
+        Serial.println("MQTTManager: Error - Failed to mount LittleFS (no auto-format)");
         Serial.println("MQTTManager: This usually means filesystem wasn't uploaded or is corrupted");
         Serial.println("MQTTManager: Attempting format and creating empty filesystem...");
 
         // Only format if explicitly needed
-        if (!SPIFFS.begin(true)) {
-            Serial.println("MQTTManager: Error - Failed to mount SPIFFS even after format");
+        if (!LittleFS.begin(true)) {
+            Serial.println("MQTTManager: Error - Failed to mount LittleFS even after format");
             Serial.println("MQTTManager: Check partition table configuration");
             return false;
         }
-        Serial.println("MQTTManager: SPIFFS formatted - please run 'pio run -t uploadfs' and reboot");
+        Serial.println("MQTTManager: LittleFS formatted - please run 'pio run -t uploadfs' and reboot");
         return false;  // Don't continue without certificates
     }
 
-    Serial.println("MQTTManager: SPIFFS mounted successfully");
+    Serial.println("MQTTManager: LittleFS mounted successfully");
 
     // Load CA certificate (required for server verification)
     String caCertStr = loadCertificateFile(CERT_PATH_CA);
@@ -312,7 +312,7 @@ bool MQTTManager::loadCertificates() {
     wifi_client_secure->setHandshakeTimeout(30000);
 
     // Load CA certificate using Stream method (preferred)
-    File caFile = SPIFFS.open(CERT_PATH_CA, "r");
+    File caFile = LittleFS.open(CERT_PATH_CA, "r");
     if (caFile && wifi_client_secure->loadCACert(caFile, caFile.size())) {
         Serial.println("MQTTManager: CA certificate configured via Stream");
         caFile.close();
@@ -325,7 +325,7 @@ bool MQTTManager::loadCertificates() {
     // Load client certificate and key (only for mutual TLS)
     if (client_cert_data != nullptr && client_key_data != nullptr) {
         // Load client certificate
-        File certFile = SPIFFS.open(CERT_PATH_CLIENT_CERT, "r");
+        File certFile = LittleFS.open(CERT_PATH_CLIENT_CERT, "r");
         if (certFile && wifi_client_secure->loadCertificate(certFile, certFile.size())) {
             Serial.println("MQTTManager: Client certificate configured via Stream");
             certFile.close();
@@ -336,7 +336,7 @@ bool MQTTManager::loadCertificates() {
         }
 
         // Load private key
-        File keyFile = SPIFFS.open(CERT_PATH_CLIENT_KEY, "r");
+        File keyFile = LittleFS.open(CERT_PATH_CLIENT_KEY, "r");
         if (keyFile && wifi_client_secure->loadPrivateKey(keyFile, keyFile.size())) {
             Serial.println("MQTTManager: Private key configured via Stream");
             keyFile.close();

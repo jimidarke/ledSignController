@@ -21,7 +21,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <functional>
 
 // Certificate paths for TLS authentication (from defines.h)
