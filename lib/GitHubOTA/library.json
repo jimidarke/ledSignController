@@ -1,0 +1,20 @@
+{
+  "name": "GitHubOTA",
+  "version": "1.0.0",
+  "description": "GitHub Releases-based OTA update library for ESP32",
+  "keywords": "esp32, ota, github, update, firmware",
+  "authors": [
+    {
+      "name": "ESP32 Project",
+      "maintainer": true
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "ArduinoJson",
+      "version": "^6.21.0"
+    }
+  ],
+  "frameworks": "arduino",
+  "platforms": "espressif32"
+}

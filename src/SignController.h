@@ -80,16 +80,32 @@ private:
     // Priority message management
     bool in_priority_mode;              ///< Whether priority message is active
     unsigned long priority_start_time;  ///< When priority message started
-    
+    unsigned long priority_end_time;    ///< When priority message should end
+    unsigned int priority_duration;     ///< Duration in seconds for priority message
+    String priority_message_content;    ///< Stored content for priority message display
+
+    // Priority message stages
+    enum PriorityStage {
+        PRIORITY_NONE,
+        PRIORITY_WARNING,
+        PRIORITY_MESSAGE
+    };
+    PriorityStage priority_stage;       ///< Current stage of priority message
+
+    // Offline mode sequence management
+    bool in_offline_mode;               ///< Whether offline mode sequence is active
+    int offline_sequence_stage;         ///< Current stage in offline sequence (0-5)
+    unsigned long offline_stage_start;  ///< When current offline stage started
+
     // Clock display management
     bool clock_enabled;                 ///< Whether clock display is enabled
     unsigned long clock_start_time;     ///< When clock was last displayed
     unsigned long clock_display_duration; ///< How long to show clock (ms)
-    
+
     // Timing constants
-    static const unsigned long PRIORITY_WARNING_DURATION = 2500;  ///< Priority warning display time
-    static const unsigned long PRIORITY_MESSAGE_DURATION = 25000; ///< Priority message display time
-    static const unsigned long CLOCK_DISPLAY_DURATION = 10000;    ///< Default clock display time
+    static const unsigned long PRIORITY_WARNING_DURATION = 2500;  ///< Priority warning display time (ms)
+    static const unsigned long DEFAULT_PRIORITY_DURATION = 25;    ///< Default priority message duration (seconds)
+    static const unsigned long CLOCK_DISPLAY_DURATION = 4000;     ///< Default clock display time (ms) - 4 seconds
     
     /**
      * @brief Display connection details when offline
@@ -127,17 +143,21 @@ public:
      * @param position Position code for the message
      * @param mode Display mode/animation
      * @param special Special effect code
+     * @param charset Character set code (default: 7high)
+     * @param speed Speed code string (default: medium)
      * @return true if message sent successfully, false otherwise
      */
-    bool displayMessage(const char* message, char color, char position, char mode, char special);
+    bool displayMessage(const char* message, char color, char position, char mode, char special,
+                       char charset = '3', const char* speed = "\027");
     
     /**
      * @brief Display a priority message that interrupts normal operation
      * Priority messages show a warning, then the message, then resume normal operation
      * @param message Priority message content
+     * @param duration Duration in seconds to display message (default: 25 seconds)
      * @return true if priority message initiated, false otherwise
      */
-    bool displayPriorityMessage(const char* message);
+    bool displayPriorityMessage(const char* message, unsigned int duration = DEFAULT_PRIORITY_DURATION);
     
     /**
      * @brief Clear all text files on the sign
@@ -157,6 +177,18 @@ public:
      * Returns sign to normal operation
      */
     void cancelPriorityMessage();
+
+    /**
+     * @brief Check and handle priority message timeout
+     * Called from main loop to manage non-blocking priority message transitions
+     */
+    void checkPriorityTimeout();
+
+    /**
+     * @brief Check and handle offline mode sequence progression
+     * Called from main loop to manage non-blocking offline mode display
+     */
+    void checkOfflineTimeout();
     
     /**
      * @brief Handle system commands (clear, factory reset)
@@ -170,6 +202,20 @@ public:
      * Shows WiFi credentials and setup information when device is offline
      */
     void showOfflineMode();
+
+    /**
+     * @brief Cancel offline mode sequence
+     * Stops the offline mode display and returns to normal operation
+     */
+    void cancelOfflineMode();
+
+    /**
+     * @brief Display error message on sign
+     * Shows error message with red color and flash mode for visibility
+     * @param error_message Error message to display
+     * @param duration_seconds How long to show error (default: 5 seconds)
+     */
+    void displayError(const char* error_message, unsigned int duration_seconds = 5);
     
     /**
      * @brief Run demonstration of all sign capabilities

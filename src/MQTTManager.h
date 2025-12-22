@@ -19,8 +19,28 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
+#include <SPIFFS.h>
 #include <functional>
+
+// Certificate paths for TLS authentication (from defines.h)
+#ifndef CERT_PATH_CA
+#define CERT_PATH_CA              "/certs/ca.crt"
+#define CERT_PATH_CLIENT_CERT     "/certs/client.crt"
+#define CERT_PATH_CLIENT_KEY      "/certs/client.key"
+#endif
+
+// MQTT Configuration constants (from defines.h)
+#ifndef MQTT_MAX_PACKET_SIZE
+#define MQTT_MAX_PACKET_SIZE      2048
+#endif
+#ifndef MQTT_QOS_LEVEL
+#define MQTT_QOS_LEVEL            1
+#endif
+#ifndef MQTT_CLEAN_SESSION
+#define MQTT_CLEAN_SESSION        false
+#endif
 
 /**
  * @brief MQTT connection and message management class
@@ -35,11 +55,20 @@ private:
     uint16_t mqtt_port;             ///< MQTT server port
     char mqtt_user[32];             ///< MQTT username
     char mqtt_pass[32];             ///< MQTT password
-    String device_id;               ///< Unique device identifier
-    
+    String device_id;               ///< Unique device identifier (MAC-based)
+    String zone_name;               ///< Zone name for topic routing (e.g., "kitchen")
+
+    // TLS/Security parameters
+    bool use_tls;                   ///< Whether to use TLS/SSL
+    bool certificates_loaded;       ///< Whether certificates loaded successfully
+    char* ca_cert_data;             ///< CA certificate storage on heap (must persist for WiFiClientSecure)
+    char* client_cert_data;         ///< Client certificate storage on heap (must persist for WiFiClientSecure)
+    char* client_key_data;          ///< Private key storage on heap (must persist for WiFiClientSecure)
+
     // MQTT client instances
-    WiFiClient* wifi_client;        ///< WiFi client for MQTT
-    PubSubClient* mqtt_client;      ///< MQTT client instance
+    WiFiClient* wifi_client;              ///< Basic WiFi client (fallback)
+    WiFiClientSecure* wifi_client_secure; ///< Secure WiFi client for TLS
+    PubSubClient* mqtt_client;            ///< MQTT client instance
     
     // Connection management
     bool is_configured;             ///< Whether MQTT is configured
@@ -67,35 +96,51 @@ private:
      * @param length Payload length
      */
     static void staticCallback(char* topic, byte* payload, unsigned int length);
-    
+
     /**
      * @brief Reset connection state variables
      */
     void resetConnectionState();
+
+    /**
+     * @brief Load TLS certificates from SPIFFS
+     * @return true if all certificates loaded successfully, false otherwise
+     */
+    bool loadCertificates();
+
+    /**
+     * @brief Load a certificate file from SPIFFS
+     * @param path File path in SPIFFS
+     * @return Certificate content as String (empty if failed)
+     */
+    String loadCertificateFile(const char* path);
     
 public:
     /**
      * @brief Constructor - initializes MQTT manager
-     * @param wifi_client Pointer to WiFiClient instance
-     * @param device_id Unique device identifier string
+     * @param wifi_client Pointer to WiFiClient instance (for fallback)
+     * @param device_id Unique device identifier string (MAC-based)
+     * @param zone_name Zone name for topic routing (default: "default")
      */
-    MQTTManager(WiFiClient* wifi_client, const String& device_id);
-    
+    MQTTManager(WiFiClient* wifi_client, const String& device_id, const String& zone_name = "default");
+
     /**
      * @brief Destructor - cleans up resources
      */
     ~MQTTManager();
-    
+
     /**
      * @brief Configure MQTT connection parameters
      * @param server MQTT server hostname/IP
-     * @param port MQTT server port (default: 1883)
+     * @param port MQTT server port (default: 42690 for TLS)
      * @param username MQTT username (can be empty)
      * @param password MQTT password (can be empty)
+     * @param use_tls Whether to use TLS (default: true)
      * @return true if configuration is valid, false otherwise
      */
-    bool configure(const char* server, uint16_t port = 1883, 
-                   const char* username = "", const char* password = "");
+    bool configure(const char* server, uint16_t port = 42690,
+                   const char* username = "", const char* password = "",
+                   bool use_tls = true);
     
     /**
      * @brief Set message callback function

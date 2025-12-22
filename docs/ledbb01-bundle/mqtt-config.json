@@ -1,0 +1,17 @@
+{
+  "mqtt": {
+    "broker": "alert.d-t.pw",
+    "port": 42690,
+    "use_tls": true,
+    "ca_cert": "ca.crt",
+    "client_cert": "client.crt",
+    "client_key": "client.key",
+    "tls_version": "tlsv1.3"
+  },
+  "client_info": {
+    "name": "ledbb01",
+    "generated": "2025-11-18T06:45:06Z",
+    "validity": "permanent (100 years)",
+    "serial": "1001"
+  }
+}

@@ -1,39 +1,52 @@
 /**
  * @file MQTTManager.cpp
  * @brief Implementation of MQTT connection and message handling
- * 
+ *
  * Contains the implementation of robust MQTT management with exponential
  * backoff, health monitoring, and telemetry publishing.
  */
 
 #include "MQTTManager.h"
+#include <time.h>
 
 // Static instance pointer for callback routing
 MQTTManager* MQTTManager::instance = nullptr;
 
-MQTTManager::MQTTManager(WiFiClient* wifi_client, const String& device_id) 
-    : wifi_client(wifi_client), device_id(device_id) {
-    
+MQTTManager::MQTTManager(WiFiClient* wifi_client, const String& device_id, const String& zone_name)
+    : wifi_client(wifi_client), device_id(device_id), zone_name(zone_name) {
+
     // Initialize connection parameters
     memset(mqtt_server, 0, sizeof(mqtt_server));
-    mqtt_port = 1883;
+    mqtt_port = 42690;  // Default TLS port per ESP32_BETABRITE_IMPLEMENTATION.md
     memset(mqtt_user, 0, sizeof(mqtt_user));
     memset(mqtt_pass, 0, sizeof(mqtt_pass));
-    
+
+    // Initialize TLS parameters
+    use_tls = true;  // Default to TLS per documentation
+    certificates_loaded = false;
+    wifi_client_secure = nullptr;
+    ca_cert_data = nullptr;
+    client_cert_data = nullptr;
+    client_key_data = nullptr;
+
     // Initialize state variables
     is_configured = false;
     last_attempt_time = 0;
     reconnect_attempts = 0;
     backoff_delay = INITIAL_BACKOFF;
     last_telemetry_time = 0;
-    
-    // Create MQTT client
-    mqtt_client = new PubSubClient(*wifi_client);
-    
+
+    // Create MQTT client (will set actual client in configure())
+    mqtt_client = nullptr;
+
     // Set static instance for callback routing
     instance = this;
-    
+
     Serial.println("MQTTManager: Initialized");
+    Serial.print("MQTTManager: Zone: ");
+    Serial.println(zone_name);
+    Serial.print("MQTTManager: Device ID: ");
+    Serial.println(device_id);
 }
 
 MQTTManager::~MQTTManager() {
@@ -41,50 +54,108 @@ MQTTManager::~MQTTManager() {
         mqtt_client->disconnect();
         delete mqtt_client;
     }
+    if (wifi_client_secure) {
+        delete wifi_client_secure;
+    }
+    // Free certificate memory
+    if (ca_cert_data) {
+        free(ca_cert_data);
+    }
+    if (client_cert_data) {
+        free(client_cert_data);
+    }
+    if (client_key_data) {
+        free(client_key_data);
+    }
     instance = nullptr;
 }
 
-bool MQTTManager::configure(const char* server, uint16_t port, 
-                           const char* username, const char* password) {
-    
+bool MQTTManager::configure(const char* server, uint16_t port,
+                           const char* username, const char* password,
+                           bool use_tls) {
+
     // Validate server parameter
     if (server == NULL || strlen(server) == 0) {
         Serial.println("MQTTManager: Error - Server cannot be empty");
         return false;
     }
-    
+
     // Validate port range
     if (port <= 0 || port > 65535) {
         Serial.println("MQTTManager: Error - Invalid port number");
         return false;
     }
-    
+
     // Store configuration
     strncpy(mqtt_server, server, sizeof(mqtt_server) - 1);
     mqtt_server[sizeof(mqtt_server) - 1] = '\0';
-    
+
     mqtt_port = port;
-    
+    this->use_tls = use_tls;
+
     // Store credentials (can be empty)
     if (username != NULL) {
         strncpy(mqtt_user, username, sizeof(mqtt_user) - 1);
         mqtt_user[sizeof(mqtt_user) - 1] = '\0';
     }
-    
+
     if (password != NULL) {
         strncpy(mqtt_pass, password, sizeof(mqtt_pass) - 1);
         mqtt_pass[sizeof(mqtt_pass) - 1] = '\0';
     }
-    
+
+    // Setup TLS if requested
+    if (use_tls) {
+        Serial.println("MQTTManager: TLS enabled - loading certificates");
+
+        // Create secure client
+        if (!wifi_client_secure) {
+            wifi_client_secure = new WiFiClientSecure();
+        }
+
+        // Load certificates from SPIFFS
+        if (loadCertificates()) {
+            Serial.println("MQTTManager: Certificates loaded successfully");
+            certificates_loaded = true;
+
+            // Create MQTT client with secure client
+            if (mqtt_client) {
+                delete mqtt_client;
+            }
+            mqtt_client = new PubSubClient(*wifi_client_secure);
+        } else {
+            Serial.println("MQTTManager: Warning - Certificate loading failed");
+            Serial.println("MQTTManager: Falling back to insecure mode");
+            certificates_loaded = false;
+            this->use_tls = false;
+
+            // Fallback to basic client
+            if (mqtt_client) {
+                delete mqtt_client;
+            }
+            mqtt_client = new PubSubClient(*wifi_client);
+        }
+    } else {
+        Serial.println("MQTTManager: TLS disabled - using basic connection");
+
+        // Create MQTT client with basic client
+        if (mqtt_client) {
+            delete mqtt_client;
+        }
+        mqtt_client = new PubSubClient(*wifi_client);
+    }
+
     is_configured = true;
-    
+
     Serial.print("MQTTManager: Configured - Server: ");
     Serial.print(mqtt_server);
     Serial.print(":");
     Serial.print(mqtt_port);
+    Serial.print(", TLS: ");
+    Serial.print(this->use_tls ? "YES" : "NO");
     Serial.print(", User: ");
     Serial.println(strlen(mqtt_user) > 0 ? mqtt_user : "(none)");
-    
+
     return true;
 }
 
@@ -116,6 +187,171 @@ void MQTTManager::resetConnectionState() {
     reconnect_attempts = 0;
     backoff_delay = INITIAL_BACKOFF;
     last_attempt_time = 0;
+}
+
+String MQTTManager::loadCertificateFile(const char* path) {
+    File file = SPIFFS.open(path, "r");
+    if (!file) {
+        Serial.print("MQTTManager: Warning - File not found: ");
+        Serial.println(path);
+        return "";
+    }
+
+    size_t size = file.size();
+    if (size == 0) {
+        Serial.print("MQTTManager: Warning - Empty file: ");
+        Serial.println(path);
+        file.close();
+        return "";
+    }
+
+    String content = file.readString();
+    file.close();
+
+    // Trim whitespace and normalize line endings (Windows CRLF -> Unix LF)
+    content.trim();
+    content.replace("\r\n", "\n");
+    content.replace("\r", "\n");
+
+    return content;
+}
+
+bool MQTTManager::loadCertificates() {
+    // Initialize SPIFFS if not already initialized
+    // Try mounting WITHOUT auto-format first to preserve uploaded files
+    if (!SPIFFS.begin(false)) {
+        Serial.println("MQTTManager: Error - Failed to mount SPIFFS (no auto-format)");
+        Serial.println("MQTTManager: This usually means filesystem wasn't uploaded or is corrupted");
+        Serial.println("MQTTManager: Attempting format and creating empty filesystem...");
+
+        // Only format if explicitly needed
+        if (!SPIFFS.begin(true)) {
+            Serial.println("MQTTManager: Error - Failed to mount SPIFFS even after format");
+            Serial.println("MQTTManager: Check partition table configuration");
+            return false;
+        }
+        Serial.println("MQTTManager: SPIFFS formatted - please run 'pio run -t uploadfs' and reboot");
+        return false;  // Don't continue without certificates
+    }
+
+    Serial.println("MQTTManager: SPIFFS mounted successfully");
+
+    // Load CA certificate (required for server verification)
+    String caCertStr = loadCertificateFile(CERT_PATH_CA);
+    if (caCertStr.length() == 0) {
+        Serial.println("MQTTManager: Error - CA certificate not found or empty");
+        Serial.println("MQTTManager: Please upload certificates: pio run -t uploadfs");
+        return false;
+    }
+
+    // Allocate heap memory and copy (add 1 for null terminator)
+    ca_cert_data = (char*)malloc(caCertStr.length() + 1);
+    if (!ca_cert_data) {
+        Serial.println("MQTTManager: Error - Failed to allocate memory for CA cert");
+        return false;
+    }
+    strcpy(ca_cert_data, caCertStr.c_str());
+    Serial.print("MQTTManager: CA certificate loaded (");
+    Serial.print(strlen(ca_cert_data));
+    Serial.println(" bytes)");
+
+    // Load client certificate (optional - only needed for mutual TLS)
+    String clientCertStr = loadCertificateFile(CERT_PATH_CLIENT_CERT);
+    if (clientCertStr.length() > 0) {
+        // Mutual TLS mode: CA cert + client cert + private key
+        Serial.println("MQTTManager: Client certificate found - mutual TLS mode");
+
+        // Allocate heap memory and copy
+        client_cert_data = (char*)malloc(clientCertStr.length() + 1);
+        if (!client_cert_data) {
+            Serial.println("MQTTManager: Error - Failed to allocate memory for client cert");
+            return false;
+        }
+        strcpy(client_cert_data, clientCertStr.c_str());
+        Serial.print("MQTTManager: Client certificate loaded (");
+        Serial.print(strlen(client_cert_data));
+        Serial.println(" bytes)");
+
+        // Load client private key (required if client cert exists)
+        String clientKeyStr = loadCertificateFile(CERT_PATH_CLIENT_KEY);
+        if (clientKeyStr.length() == 0) {
+            Serial.println("MQTTManager: Error - Client private key not found but cert exists");
+            Serial.println("MQTTManager: For mutual TLS, both client.crt and client.key are required");
+            return false;
+        }
+
+        // Allocate heap memory and copy
+        client_key_data = (char*)malloc(clientKeyStr.length() + 1);
+        if (!client_key_data) {
+            Serial.println("MQTTManager: Error - Failed to allocate memory for private key");
+            return false;
+        }
+        strcpy(client_key_data, clientKeyStr.c_str());
+        Serial.print("MQTTManager: Private key loaded (");
+        Serial.print(strlen(client_key_data));
+        Serial.println(" bytes)");
+
+        Serial.println("MQTTManager: Certificate-based authentication enabled");
+    } else {
+        // Server-only TLS mode: CA cert only
+        Serial.println("MQTTManager: No client certificate - server verification mode");
+        Serial.println("MQTTManager: Authentication will use username/password");
+        client_cert_data = nullptr;
+        client_key_data = nullptr;
+    }
+
+    // Configure WiFiClientSecure with certificates
+    if (!wifi_client_secure) {
+        Serial.println("MQTTManager: Error - Secure client not initialized");
+        return false;
+    }
+
+    Serial.println("MQTTManager: Configuring WiFiClientSecure...");
+
+    // Set longer handshake timeout (default is 10s, increase to 30s for reliability)
+    wifi_client_secure->setHandshakeTimeout(30000);
+
+    // Load CA certificate using Stream method (preferred)
+    File caFile = SPIFFS.open(CERT_PATH_CA, "r");
+    if (caFile && wifi_client_secure->loadCACert(caFile, caFile.size())) {
+        Serial.println("MQTTManager: CA certificate configured via Stream");
+        caFile.close();
+    } else {
+        if (caFile) caFile.close();
+        wifi_client_secure->setCACert(ca_cert_data);
+        Serial.println("MQTTManager: CA certificate configured via setCACert");
+    }
+
+    // Load client certificate and key (only for mutual TLS)
+    if (client_cert_data != nullptr && client_key_data != nullptr) {
+        // Load client certificate
+        File certFile = SPIFFS.open(CERT_PATH_CLIENT_CERT, "r");
+        if (certFile && wifi_client_secure->loadCertificate(certFile, certFile.size())) {
+            Serial.println("MQTTManager: Client certificate configured via Stream");
+            certFile.close();
+        } else {
+            if (certFile) certFile.close();
+            wifi_client_secure->setCertificate(client_cert_data);
+            Serial.println("MQTTManager: Client certificate configured via setCertificate");
+        }
+
+        // Load private key
+        File keyFile = SPIFFS.open(CERT_PATH_CLIENT_KEY, "r");
+        if (keyFile && wifi_client_secure->loadPrivateKey(keyFile, keyFile.size())) {
+            Serial.println("MQTTManager: Private key configured via Stream");
+            keyFile.close();
+        } else {
+            if (keyFile) keyFile.close();
+            wifi_client_secure->setPrivateKey(client_key_data);
+            Serial.println("MQTTManager: Private key configured via setPrivateKey");
+        }
+        Serial.println("MQTTManager: Mutual TLS ready (certificate-based auth)");
+    } else {
+        Serial.println("MQTTManager: Server verification ready (username/password auth)");
+    }
+
+    Serial.println("MQTTManager: All certificates configured successfully");
+    return true;
 }
 
 void MQTTManager::loop() {
@@ -159,16 +395,44 @@ void MQTTManager::loop() {
         return;
     }
     
-    // Attempt connection
-    Serial.print("MQTTManager: Attempting connection... ");
-    
-    String client_id = "LEDSign_" + device_id;
+    // Check if system time is valid (required for TLS certificate validation)
+    if (use_tls && certificates_loaded) {
+        time_t now = time(nullptr);
+        if (now < 1609459200) {  // January 1, 2021 - if time is before this, NTP hasn't synced
+            Serial.println("MQTTManager: Waiting for NTP time sync (required for TLS)...");
+            return;  // Don't attempt connection until time is synced
+        }
+        Serial.print("MQTTManager: System time is valid: ");
+        Serial.println(ctime(&now));
+    }
+
+    // Attempt MQTT connection
+    Serial.print("MQTTManager: Attempting MQTT connection to ");
+    Serial.print(mqtt_server);
+    Serial.print(":");
+    Serial.println(mqtt_port);
+
+    // Client ID format per ESP32_BETABRITE_IMPLEMENTATION.md:
+    // esp32-betabrite-{zone}-{mac_address}
+    String client_id = "esp32-betabrite-" + zone_name + "-" + device_id;
     bool connected = false;
-    
+
+    // Set buffer size for larger JSON payloads
+    mqtt_client->setBufferSize(MQTT_MAX_PACKET_SIZE);
+
+    Serial.print("MQTTManager: Client ID: ");
+    Serial.println(client_id);
+    Serial.print("MQTTManager: Username: ");
+    Serial.println(strlen(mqtt_user) > 0 ? mqtt_user : "(none)");
+
     if (strlen(mqtt_user) > 0) {
-        connected = mqtt_client->connect(client_id.c_str(), mqtt_user, mqtt_pass);
+        // Connect with credentials and clean session = false (persistent session)
+        connected = mqtt_client->connect(client_id.c_str(), mqtt_user, mqtt_pass,
+                                        NULL, 0, false, NULL, !MQTT_CLEAN_SESSION);
     } else {
-        connected = mqtt_client->connect(client_id.c_str());
+        // Connect without credentials (certificate-based auth only)
+        connected = mqtt_client->connect(client_id.c_str(), NULL, NULL,
+                                        NULL, 0, false, NULL, !MQTT_CLEAN_SESSION);
     }
     
     if (connected) {
@@ -279,21 +543,20 @@ bool MQTTManager::subscribeToTopics() {
     if (!isConnected()) {
         return false;
     }
-    
-    // Subscribe to device-specific message topic
-    String device_topic = "ledSign/" + device_id + "/message";
-    bool device_sub = mqtt_client->subscribe(device_topic.c_str());
-    
-    // Subscribe to general broadcast topic
-    bool general_sub = mqtt_client->subscribe("ledSign/message");
-    
-    if (device_sub && general_sub) {
-        Serial.print("MQTTManager: Subscribed to topics: ");
-        Serial.print(device_topic);
-        Serial.println(" and ledSign/message");
+
+    // Subscribe to zone-specific message topic (per ESP32_BETABRITE_IMPLEMENTATION.md)
+    // Format: ledSign/{zone}/message
+    String zone_topic = "ledSign/" + zone_name + "/message";
+    bool zone_sub = mqtt_client->subscribe(zone_topic.c_str(), MQTT_QOS_LEVEL);
+
+    if (zone_sub) {
+        Serial.print("MQTTManager: Subscribed to zone topic: ");
+        Serial.println(zone_topic);
+        Serial.print("MQTTManager: QoS Level: ");
+        Serial.println(MQTT_QOS_LEVEL);
         return true;
     } else {
-        Serial.println("MQTTManager: Topic subscription failed");
+        Serial.println("MQTTManager: Zone topic subscription failed");
         return false;
     }
 }

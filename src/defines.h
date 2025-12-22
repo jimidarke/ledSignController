@@ -57,18 +57,21 @@
 
 /////////////////////////////////////////////
 
-// LittleFS has higher priority than SPIFFS
-#if ( defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 2) )
-  #define USE_LITTLEFS    true
-  #define USE_SPIFFS      false
-#elif defined(ARDUINO_ESP32C3_DEV)
-  // For core v1.0.6-, ESP32-C3 only supporting SPIFFS and EEPROM. To use v2.0.0+ for LittleFS
-  #define USE_LITTLEFS          false
-  #define USE_SPIFFS            true
-#else
-  // For ESP8266, and other boards
-  #define USE_LITTLEFS    true
-  #define USE_SPIFFS      false  
+// Filesystem selection - Check if already defined by build flags first
+#if !defined(USE_LITTLEFS) && !defined(USE_SPIFFS)
+  // LittleFS has higher priority than SPIFFS (but can be overridden by build flags)
+  #if ( defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 2) )
+    #define USE_LITTLEFS    true
+    #define USE_SPIFFS      false
+  #elif defined(ARDUINO_ESP32C3_DEV)
+    // For core v1.0.6-, ESP32-C3 only supporting SPIFFS and EEPROM. To use v2.0.0+ for LittleFS
+    #define USE_LITTLEFS          false
+    #define USE_SPIFFS            true
+  #else
+    // For ESP8266, and other boards
+    #define USE_LITTLEFS    true
+    #define USE_SPIFFS      false
+  #endif
 #endif
 
 /////////////////////////////////////////////
@@ -154,35 +157,99 @@
 /////// LED SIGN CONTROLLER DEFINES /////////
 /////////////////////////////////////////////
 #include "BETABRITE.h"
-#include "Credentials.h" 
+#include "Credentials.h"
 #include "dynamicParams.h"
 
-#define MQTT_MAX_PACKET_SIZE      512
-#define MQTT_KEEPALIVE            60
+// MQTT Configuration (Alert Manager Integration)
+// Note: PubSubClient.h defines these first, so we need to undefine and redefine
+#ifdef MQTT_MAX_PACKET_SIZE
+#undef MQTT_MAX_PACKET_SIZE
+#endif
+#define MQTT_MAX_PACKET_SIZE      2048    // Increased for JSON payloads
 
+#ifdef MQTT_KEEPALIVE
+#undef MQTT_KEEPALIVE
+#endif
+#define MQTT_KEEPALIVE            60      // Per ESP32_BETABRITE_IMPLEMENTATION.md
+
+#define MQTT_QOS_LEVEL            1       // At least once delivery
+#define MQTT_CLEAN_SESSION        false   // Persistent session for reliability
+
+// TLS MQTT Ports (per ESP32_BETABRITE_IMPLEMENTATION.md)
+#define MQTT_TLS_PORT_PRODUCTION  42690   // Production TLS port
+#define MQTT_TLS_PORT_DEVELOPMENT 46942   // Development TLS port
+#define MQTT_BASIC_PORT           1883    // Fallback non-TLS port
+
+// Certificate paths for TLS authentication (stored in SPIFFS)
+#define CERT_PATH_CA              "/certs/ca.crt"
+#define CERT_PATH_CLIENT_CERT     "/certs/client.crt"
+#define CERT_PATH_CLIENT_KEY      "/certs/client.key"
+
+// Zone Configuration (per ESP32_BETABRITE_IMPLEMENTATION.md)
+// Default zone name - should be configured via WiFi portal
+#define SIGN_DEFAULT_ZONE         "default"
+
+// Time Configuration
 #define SIGN_TIMEZONE_POSIX       "MST7MDT,M3.2.0/2,M11.1.0/2"
 
+// Display Timing
 #define SIGN_SHOW_CLOCK_DELAY_MS  10000
 #define SIGN_SHOW_ALERT_DELAY_MS  30000
 
+// WiFi Portal Configuration
 #define SIGN_DEFAULT_SSID         "LEDSign"
 #define SIGN_DEFAULT_PASS         "ledsign0"
 
-#define SIGN_DEFAULT_COLOUR       BB_COL_AUTOCOLOR
+// Display Defaults (Fallback when display_config missing)
+#define SIGN_DEFAULT_COLOUR       BB_COL_GREEN      // Green for normal messages
 #define SIGN_DEFAULT_POSITION     BB_DP_TOPLINE
-#define SIGN_DEFAULT_MODE         BB_DM_AUTOMODE
-#define SIGN_DEFAULT_SPECIAL      BB_SDM_INTERLOCK
+#define SIGN_DEFAULT_MODE         BB_DM_ROTATE
+#define SIGN_DEFAULT_SPECIAL      BB_SDM_TWINKLE
+#define SIGN_DEFAULT_CHARSET      '3'               // 7high
+#define SIGN_DEFAULT_SPEED        "\027"            // Medium (speed 3)
 
-#define SIGN_CLOCK_COLOUR         SIGN_DEFAULT_COLOUR
-#define SIGN_CLOCK_POSITION       SIGN_DEFAULT_POSITION
-#define SIGN_CLOCK_MODE           BB_DM_CLOCK
+// Clock Display Configuration
+#define SIGN_CLOCK_COLOUR         BB_COL_AMBER
+#define SIGN_CLOCK_POSITION       BB_DP_TOPLINE
+#define SIGN_CLOCK_MODE           BB_DM_HOLD
 #define SIGN_CLOCK_SPECIAL        BB_SDM_TWINKLE
 
-#define SIGN_INIT_COLOUR          SIGN_DEFAULT_COLOUR 
-#define SIGN_INIT_POSITION        SIGN_DEFAULT_POSITION
-#define SIGN_INIT_MODE            SIGN_DEFAULT_MODE
-#define SIGN_INIT_SPECIAL         SIGN_DEFAULT_SPECIAL
-#define SIGN_INIT_STRING          "Darke Tech Corp. 2024"
+// Initialization Message
+#define SIGN_INIT_COLOUR          BB_COL_GREEN
+#define SIGN_INIT_POSITION        BB_DP_TOPLINE
+#define SIGN_INIT_MODE            BB_DM_ROTATE
+#define SIGN_INIT_SPECIAL         BB_SDM_WELCOME
+#define SIGN_INIT_STRING          "Alert Manager Ready"
+
+/////////////////////////////////////////////
+/////// OTA UPDATE CONFIGURATION ////////////
+/////////////////////////////////////////////
+
+// Current firmware version (semantic versioning: major.minor.patch)
+// Update this with each release
+#define FIRMWARE_VERSION          "0.2.0"
+
+// GitHub Repository Configuration
+// TODO: Update these with your actual GitHub username and repository name
+#define GITHUB_REPO_OWNER         "yourusername"     // Your GitHub username/organization
+#define GITHUB_REPO_NAME          "ledSignController"  // Your repository name
+
+// GitHub Personal Access Token (stored in SPIFFS for security)
+// Create token at: https://github.com/settings/tokens
+// Required scopes: repo (for private repos) or public_repo (for public repos)
+#define GITHUB_TOKEN_PATH         "/github_token.txt"
+
+// OTA Update Check Interval
+#define OTA_CHECK_INTERVAL_HOURS  24              // Check for updates every 24 hours
+#define OTA_CHECK_INTERVAL_MS     (OTA_CHECK_INTERVAL_HOURS * 60 * 60 * 1000UL)
+
+// OTA Update Behavior
+#define OTA_AUTO_UPDATE_ENABLED   true            // Automatically download and install updates
+#define OTA_BOOT_CHECK_ENABLED    false           // Also check for updates on boot (in addition to periodic)
+
+// OTA Security Settings
+#define OTA_VERIFY_CHECKSUM       true            // Require SHA256 checksum verification
+#define OTA_ALLOW_DOWNGRADE       false           // Prevent downgrading to older versions
 
 
 

@@ -1,0 +1,170 @@
+{
+  "description": "Sample Alert Messages for LED Sign Controller Testing",
+  "documentation": "Per ESP32_BETABRITE_IMPLEMENTATION.md",
+  "alerts": {
+    "critical_security": {
+      "timestamp": 1704045600,
+      "level": "critical",
+      "category": "security",
+      "title": "Intruder Alert",
+      "message": "Motion detected at front door",
+      "display_config": {
+        "mode": "flash",
+        "mode_code": "c",
+        "special_effect": "bomb",
+        "effect_code": "Z",
+        "color": "red",
+        "color_code": "1",
+        "character_set": "10high",
+        "charset_code": "6",
+        "position": "fill",
+        "position_code": "0",
+        "speed": 5,
+        "speed_code": "\\031",
+        "priority": true,
+        "duration": 60
+      },
+      "source": "security-system-01",
+      "zone": "kitchen"
+    },
+    "warning_weather": {
+      "timestamp": 1704045600,
+      "level": "warning",
+      "category": "weather",
+      "title": "Snow Warning",
+      "message": "Heavy snow expected tonight, 3-5 inches",
+      "display_config": {
+        "mode": "scroll",
+        "mode_code": "m",
+        "special_effect": "snow",
+        "effect_code": "2",
+        "color": "amber",
+        "color_code": "3",
+        "character_set": "7high",
+        "charset_code": "3",
+        "position": "topline",
+        "position_code": "\"",
+        "speed": 2,
+        "speed_code": "\\026",
+        "priority": false,
+        "duration": 45
+      },
+      "source": "weather-service",
+      "zone": "living_room"
+    },
+    "notice_automation": {
+      "timestamp": 1704045600,
+      "level": "notice",
+      "category": "automation",
+      "title": "Task Complete",
+      "message": "Backup completed successfully",
+      "display_config": {
+        "mode": "wipein",
+        "mode_code": "r",
+        "special_effect": "welcome",
+        "effect_code": "8",
+        "color": "green",
+        "color_code": "2",
+        "character_set": "7high",
+        "charset_code": "3",
+        "position": "midline",
+        "position_code": " ",
+        "speed": 3,
+        "speed_code": "\\027",
+        "priority": false,
+        "duration": 20
+      },
+      "source": "automation-controller",
+      "zone": "office"
+    },
+    "info_system": {
+      "timestamp": 1704045600,
+      "level": "info",
+      "category": "system",
+      "title": "System Update",
+      "message": "Server maintenance completed - all systems operational",
+      "display_config": {
+        "mode": "rotate",
+        "mode_code": "a",
+        "special_effect": "twinkle",
+        "effect_code": "0",
+        "color": "green",
+        "color_code": "2",
+        "character_set": "7high",
+        "charset_code": "3",
+        "position": "midline",
+        "position_code": " ",
+        "speed": 2,
+        "speed_code": "\\026",
+        "priority": false,
+        "duration": 15
+      },
+      "source": "system-monitor",
+      "zone": "default"
+    },
+    "critical_network": {
+      "timestamp": 1704045600,
+      "level": "critical",
+      "category": "network",
+      "title": "Network Outage",
+      "message": "Primary internet connection lost - failover activated",
+      "display_config": {
+        "mode": "newsflash",
+        "mode_code": "A",
+        "special_effect": "trumpet",
+        "effect_code": "B",
+        "color": "red",
+        "color_code": "1",
+        "character_set": "10high",
+        "charset_code": "6",
+        "position": "fill",
+        "position_code": "0",
+        "speed": 5,
+        "speed_code": "\\031",
+        "priority": true,
+        "duration": 90
+      },
+      "source": "network-monitor",
+      "zone": "office"
+    },
+    "info_personal": {
+      "timestamp": 1704045600,
+      "level": "info",
+      "category": "personal",
+      "title": "Reminder",
+      "message": "Meeting starts in 15 minutes - Conference Room B",
+      "display_config": {
+        "mode": "rollin",
+        "mode_code": "p",
+        "special_effect": "sparkle",
+        "effect_code": "1",
+        "color": "rainbow1",
+        "color_code": "9",
+        "character_set": "7highfancy",
+        "charset_code": "5",
+        "position": "midline",
+        "position_code": " ",
+        "speed": 3,
+        "speed_code": "\\027",
+        "priority": false,
+        "duration": 30
+      },
+      "source": "calendar-sync",
+      "zone": "kitchen"
+    },
+    "warning_system_minimal": {
+      "timestamp": 1704045600,
+      "level": "warning",
+      "category": "system",
+      "title": "Low Disk Space",
+      "message": "Server storage at 85% capacity",
+      "source": "disk-monitor",
+      "zone": "office"
+    }
+  },
+  "usage": {
+    "mosquitto_pub_example": "mosquitto_pub -h alert.d-t.pw -p 42690 --cafile ca.crt --cert client.crt --key client.key -t 'ledSign/kitchen/message' -m '{...json...}'",
+    "curl_example": "curl -X POST https://alert.d-t.pw/alert -u username:password -H 'Content-Type: application/json' -d @critical_security.json",
+    "note": "The last example (warning_system_minimal) shows minimal required fields - system will use default display_config"
+  }
+}

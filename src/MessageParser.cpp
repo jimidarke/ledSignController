@@ -1,9 +1,19 @@
 /**
  * @file MessageParser.cpp
  * @brief Implementation of message parsing utilities
- * 
- * Contains the implementation of all message parsing functionality including
- * option lookup tables, validation, and parsing logic.
+ *
+ * ⚠️  DEPRECATED - This module is no longer used ⚠️
+ *
+ * As of version 0.2.0, bracket notation parsing has been replaced with
+ * JSON-only message format for Alert Manager integration.
+ *
+ * Contains the implementation of deprecated message parsing functionality:
+ * - Bracket notation parsing [color,mode]message
+ * - Option lookup tables for colors, modes, and special effects
+ * - String-based validation and parsing logic
+ *
+ * @deprecated Use JSON format with handleMQTTMessage() in main.cpp
+ * @see docs/ESP32_BETABRITE_IMPLEMENTATION.md for current message format
  */
 
 #include "MessageParser.h"

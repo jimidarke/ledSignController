@@ -11,15 +11,21 @@
 
 SignController::SignController(BETABRITE* sign_instance, const String& device_id, int max_files)
     : sign(sign_instance), device_id(device_id), max_files(max_files) {
-    
+
     // Initialize state variables
     current_file = 'A';
     in_priority_mode = false;
     priority_start_time = 0;
+    priority_end_time = 0;
+    priority_duration = DEFAULT_PRIORITY_DURATION;
+    priority_stage = PRIORITY_NONE;
+    in_offline_mode = false;
+    offline_sequence_stage = 0;
+    offline_stage_start = 0;
     clock_enabled = true;
     clock_start_time = 0;
     clock_display_duration = CLOCK_DISPLAY_DURATION;
-    
+
     Serial.println("SignController: Initialized");
 }
 
@@ -75,23 +81,24 @@ bool SignController::configureMemory(char start_file, int num_files) {
     return true;
 }
 
-bool SignController::displayMessage(const char* message, char color, char position, char mode, char special) {
+bool SignController::displayMessage(const char* message, char color, char position, char mode, char special,
+                                   char charset, const char* speed) {
     if (!sign || !message) {
         Serial.println("SignController: Invalid parameters for displayMessage");
         return false;
     }
-    
+
     // Don't allow normal messages during priority mode
     if (in_priority_mode) {
         Serial.println("SignController: Ignoring message - in priority mode");
         return false;
     }
-    
+
     Serial.print("SignController: Displaying message on file ");
     Serial.print(current_file);
     Serial.print(": ");
     Serial.println(message);
-    
+
     // Log display parameters
     Serial.print("  Color: 0x");
     Serial.print(color, HEX);
@@ -100,69 +107,76 @@ bool SignController::displayMessage(const char* message, char color, char positi
     Serial.print(", Mode: 0x");
     Serial.print(mode, HEX);
     Serial.print(", Special: 0x");
-    Serial.println(special, HEX);
-    
+    Serial.print(special, HEX);
+    Serial.print(", Charset: '");
+    Serial.print(charset);
+    Serial.print("', Speed: 0x");
+    for (size_t i = 0; i < strlen(speed); i++) {
+        Serial.print((int)(speed[i]), HEX);
+    }
+    Serial.println();
+
+    // Build formatted message with charset and speed codes
+    // Format: \032<charset><speed><message>
+    // \032 = BB_FC_SELECTCHARSET
+    String formatted_message = "";
+    formatted_message += '\032';  // BB_FC_SELECTCHARSET
+    formatted_message += charset;
+    formatted_message += speed;   // Speed code string
+    formatted_message += message;
+
     // Send message to sign
-    sign->WriteTextFile(current_file, message, color, position, mode, special);
-    
+    sign->WriteTextFile(current_file, formatted_message.c_str(), color, position, mode, special);
+
     // Advance to next file
     current_file++;
-    
+
     // Wrap around if we've used all files
     if (current_file > 'A' + max_files - 1) {
         current_file = 'A';
         Serial.println("SignController: File counter wrapped to A");
     }
-    
+
     return true;
 }
 
-bool SignController::displayPriorityMessage(const char* message) {
+bool SignController::displayPriorityMessage(const char* message, unsigned int duration) {
     if (!sign || !message) {
         Serial.println("SignController: Invalid parameters for displayPriorityMessage");
         return false;
     }
-    
+
     Serial.println("SignController: ### PRIORITY MESSAGE ###");
     Serial.print("SignController: Content: ");
     Serial.println(message);
-    
+    Serial.print("SignController: Duration: ");
+    Serial.print(duration);
+    Serial.println(" seconds");
+
+    // Store message for later display stages
+    priority_message_content = String(message);
+
+    // Initialize priority mode
     in_priority_mode = true;
     priority_start_time = millis();
-    
-    // Step 1: Display priority warning
-    Serial.println("SignController: Displaying priority warning");
+    priority_duration = duration;
+    priority_stage = PRIORITY_WARNING;
+
+    // Calculate when priority should end: warning duration + message duration
+    priority_end_time = priority_start_time + PRIORITY_WARNING_DURATION + (duration * 1000UL);
+
+    // Display priority warning (stage 1)
+    Serial.println("SignController: Displaying priority warning (non-blocking)");
     sign->CancelPriorityTextFile();
     sign->WritePriorityTextFile(
-        "# # # #", 
-        BB_COL_RED, 
-        BB_DP_TOPLINE, 
-        BB_DM_FLASH, 
+        "# # # #",
+        BB_COL_RED,
+        BB_DP_TOPLINE,
+        BB_DM_FLASH,
         BB_SDM_TWINKLE
     );
-    
-    // Wait for warning duration (non-blocking delay would be better)
-    delay(PRIORITY_WARNING_DURATION);
-    
-    // Step 2: Display actual priority message
-    Serial.println("SignController: Displaying priority message content");
-    sign->CancelPriorityTextFile();
-    sign->WritePriorityTextFile(
-        message, 
-        BB_COL_AUTOCOLOR, 
-        BB_DP_TOPLINE, 
-        BB_DM_ROTATE, 
-        BB_SDM_TWINKLE
-    );
-    
-    // Wait for message duration
-    delay(PRIORITY_MESSAGE_DURATION);
-    
-    // Step 3: Cancel priority message and return to normal operation
-    Serial.println("SignController: Priority message complete, returning to normal operation");
-    sign->CancelPriorityTextFile();
-    in_priority_mode = false;
-    
+
+    // Stage transitions will be handled by checkPriorityTimeout() called from main loop
     return true;
 }
 
@@ -241,6 +255,53 @@ void SignController::cancelPriorityMessage() {
         sign->CancelPriorityTextFile();
         in_priority_mode = false;
         priority_start_time = 0;
+        priority_end_time = 0;
+        priority_stage = PRIORITY_NONE;
+        priority_message_content = "";
+    }
+}
+
+void SignController::checkPriorityTimeout() {
+    if (!sign || !in_priority_mode) {
+        return;
+    }
+
+    unsigned long current_time = millis();
+
+    // Handle stage transitions
+    switch (priority_stage) {
+        case PRIORITY_WARNING:
+            // Check if warning duration has elapsed
+            if (current_time - priority_start_time >= PRIORITY_WARNING_DURATION) {
+                // Transition to message stage
+                Serial.println("SignController: Transitioning to priority message display");
+                priority_stage = PRIORITY_MESSAGE;
+
+                // Display the actual priority message
+                sign->CancelPriorityTextFile();
+                sign->WritePriorityTextFile(
+                    priority_message_content.c_str(),
+                    BB_COL_AUTOCOLOR,
+                    BB_DP_TOPLINE,
+                    BB_DM_ROTATE,
+                    BB_SDM_TWINKLE
+                );
+            }
+            break;
+
+        case PRIORITY_MESSAGE:
+            // Check if total priority time has elapsed
+            if (current_time >= priority_end_time) {
+                // Priority message duration complete - return to normal operation
+                Serial.println("SignController: Priority message duration complete, returning to normal operation");
+                cancelPriorityMessage();
+            }
+            break;
+
+        case PRIORITY_NONE:
+        default:
+            // Should not reach here, but handle gracefully
+            break;
     }
 }
 
@@ -269,53 +330,95 @@ void SignController::showOfflineMode() {
     if (!sign) {
         return;
     }
-    
-    Serial.println("SignController: Displaying offline connection details");
-    displayOfflineDetails();
+
+    // Start non-blocking offline mode sequence if not already running
+    if (!in_offline_mode) {
+        Serial.println("SignController: Starting offline mode sequence (non-blocking)");
+        in_offline_mode = true;
+        offline_sequence_stage = 0;
+        offline_stage_start = millis();
+
+        // Display first stage immediately
+        sign->CancelPriorityTextFile();
+        sign->WritePriorityTextFile("*Offline*", BB_COL_RED, BB_DP_TOPLINE, BB_DM_EXPLODE, BB_SDM_TWINKLE);
+    }
 }
 
-void SignController::displayOfflineDetails() {
-    if (!sign) {
+void SignController::cancelOfflineMode() {
+    if (in_offline_mode) {
+        Serial.println("SignController: Canceling offline mode sequence");
+        in_offline_mode = false;
+        offline_sequence_stage = 0;
+        offline_stage_start = 0;
+
+        // Clear the display
+        if (sign) {
+            sign->CancelPriorityTextFile();
+        }
+    }
+}
+
+void SignController::displayError(const char* error_message, unsigned int duration_seconds) {
+    if (!sign || !error_message) {
         return;
     }
-    
-    // Cancel any existing priority messages
-    sign->CancelPriorityTextFile();
-    
-    // Define display parameters
-    char color = BB_COL_AUTOCOLOR;
-    char position = BB_DP_TOPLINE;
-    char mode = BB_DM_HOLD;
-    char special = BB_SDM_TWINKLE;
-    
-    // Sequence of messages to display
-    struct OfflineMessage {
+
+    Serial.print("SignController: Displaying error message: ");
+    Serial.println(error_message);
+
+    // Display error as a priority message (non-blocking)
+    // Use red color, flash mode for high visibility
+    displayPriorityMessage(error_message, duration_seconds);
+}
+
+void SignController::checkOfflineTimeout() {
+    if (!sign || !in_offline_mode) {
+        return;
+    }
+
+    unsigned long current_time = millis();
+
+    // Define offline message sequence
+    struct OfflineStage {
         const char* text;
         char color;
         char mode;
+        char special;
         unsigned long duration;
     };
-    
-    OfflineMessage messages[] = {
-        {"*Offline*", BB_COL_RED, BB_DM_EXPLODE, 5000},
-        {"Connect to:", BB_COL_GREEN, BB_DM_HOLD, 1500},
-        {"LEDSign", BB_COL_ORANGE, BB_DM_HOLD, 5000},
-        {"Password", BB_COL_GREEN, BB_DM_HOLD, 1500},
-        {"ledsign0", BB_COL_ORANGE, BB_DM_HOLD, 5000},
-        {"", BB_COL_AUTOCOLOR, BB_DM_SPECIAL, 3500} // Thank you special effect
+
+    const OfflineStage stages[] = {
+        {"*Offline*", BB_COL_RED, BB_DM_EXPLODE, BB_SDM_TWINKLE, 5000},
+        {"Connect to:", BB_COL_GREEN, BB_DM_HOLD, BB_SDM_TWINKLE, 1500},
+        {"LEDSign", BB_COL_ORANGE, BB_DM_HOLD, BB_SDM_TWINKLE, 5000},
+        {"Password", BB_COL_GREEN, BB_DM_HOLD, BB_SDM_TWINKLE, 1500},
+        {"ledsign0", BB_COL_ORANGE, BB_DM_HOLD, BB_SDM_TWINKLE, 5000},
+        {"", BB_COL_AUTOCOLOR, BB_DM_SPECIAL, BB_SDM_THANKYOU, 3500}
     };
-    
-    for (size_t i = 0; i < sizeof(messages) / sizeof(messages[0]); i++) {
-        sign->CancelPriorityTextFile();
-        
-        if (i == sizeof(messages) / sizeof(messages[0]) - 1) {
-            // Last message - thank you special effect
-            sign->WritePriorityTextFile(messages[i].text, messages[i].color, position, messages[i].mode, BB_SDM_THANKYOU);
-        } else {
-            sign->WritePriorityTextFile(messages[i].text, messages[i].color, position, messages[i].mode, special);
+
+    const int num_stages = sizeof(stages) / sizeof(stages[0]);
+
+    // Check if current stage duration has elapsed
+    if (current_time - offline_stage_start >= stages[offline_sequence_stage].duration) {
+        // Move to next stage
+        offline_sequence_stage++;
+
+        if (offline_sequence_stage >= num_stages) {
+            // Sequence complete - restart from beginning
+            offline_sequence_stage = 0;
         }
-        
-        delay(messages[i].duration);
+
+        // Display current stage
+        const OfflineStage& stage = stages[offline_sequence_stage];
+        sign->CancelPriorityTextFile();
+        sign->WritePriorityTextFile(stage.text, stage.color, BB_DP_TOPLINE, stage.mode, stage.special);
+
+        offline_stage_start = current_time;
+
+        Serial.print("SignController: Offline mode stage ");
+        Serial.print(offline_sequence_stage);
+        Serial.print(": ");
+        Serial.println(stage.text);
     }
 }
 
@@ -374,23 +477,20 @@ void SignController::loop() {
     if (!sign) {
         return;
     }
-    
+
     unsigned long current_time = millis();
-    
-    // Handle clock display timeout
+
+    // Handle priority message stage transitions and timeout
+    checkPriorityTimeout();
+
+    // Handle offline mode sequence progression
+    checkOfflineTimeout();
+
+    // Handle clock display timeout (only when not in priority mode)
     if (clock_start_time > 0 && !in_priority_mode) {
         if (current_time - clock_start_time > clock_display_duration) {
             sign->CancelPriorityTextFile();
             clock_start_time = 0;
-        }
-    }
-    
-    // Handle priority message timeout (safety net)
-    if (in_priority_mode && priority_start_time > 0) {
-        unsigned long total_priority_time = PRIORITY_WARNING_DURATION + PRIORITY_MESSAGE_DURATION + 1000; // +1s buffer
-        if (current_time - priority_start_time > total_priority_time) {
-            Serial.println("SignController: Priority message timeout - forcing cancel");
-            cancelPriorityMessage();
         }
     }
 }

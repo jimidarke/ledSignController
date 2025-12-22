@@ -31,19 +31,20 @@
 #include <time.h>
 
 // Project modules
-#include "MessageParser.h"
+// #include "MessageParser.h"  // DEPRECATED: No longer used after JSON-only implementation
 #include "MQTTManager.h"
 #include "SignController.h"
-// #include "SecureOTA.h"  // TODO: Implement SecureOTA.cpp
+#include "GitHubOTA.h"  // GitHub-based OTA updates with HTTPS and checksum verification
 
 // Third-party libraries
 #include <ArduinoJson.h>
-#include "OTAupdate.h" // Legacy OTA - will be replaced with SecureOTA
+#include <SPIFFS.h>  // For loading GitHub token from filesystem
 
 /**
  * @brief Application version and build information
+ * Version is defined in defines.h as FIRMWARE_VERSION
  */
-const char* APP_VERSION = "0.1.4";
+const char* APP_VERSION = FIRMWARE_VERSION;
 const char* BUILD_DATE = __DATE__ " " __TIME__;
 
 /**
@@ -68,13 +69,6 @@ const char* timezone_posix = SIGN_TIMEZONE_POSIX;
 const char* ntp_server = "pool.ntp.org";
 
 /**
- * @brief OTA update server configuration
- * TODO: Replace with secure HTTPS endpoints
- */
-const char* ota_version_url = "http://docker02.darketech.ca:8003/version.txt";
-const char* ota_firmware_url = "http://docker02.darketech.ca:8003/firmware.bin";
-
-/**
  * @brief Global object instances
  */
 WiFiClient wifi_client;                          ///< WiFi client for network operations
@@ -82,7 +76,7 @@ ESP_WiFiManager_Lite* wifi_manager = nullptr;   ///< WiFi configuration manager
 BETABRITE led_sign(1, 16, 17);                 ///< BetaBrite sign interface (ID=1, RX=16, TX=17)
 MQTTManager* mqtt_manager = nullptr;             ///< MQTT connection manager
 SignController* sign_controller = nullptr;       ///< LED sign control interface
-// SecureOTA* ota_manager = nullptr;               ///< Secure OTA update manager
+GitHubOTA* ota_manager = nullptr;                ///< GitHub-based OTA update manager
 
 /**
  * @brief Application state variables
@@ -91,6 +85,7 @@ String device_id;                               ///< Unique device identifier (f
 bool services_initialized = false;             ///< Whether network services are ready
 unsigned long last_health_check = 0;           ///< Last system health check timestamp
 unsigned long last_time_sync = 0;              ///< Last NTP time synchronization
+unsigned long last_offline_log = 0;            ///< Last offline status log message timestamp
 
 /**
  * @brief System health monitoring interval (30 seconds)
@@ -101,6 +96,11 @@ const unsigned long HEALTH_CHECK_INTERVAL = 30000;
  * @brief Time synchronization interval (1 hour)
  */
 const unsigned long TIME_SYNC_INTERVAL = 3600000;
+
+/**
+ * @brief Clock display interval (1 minute)
+ */
+const unsigned long CLOCK_DISPLAY_INTERVAL = 60000;
 
 /**
  * @brief WiFi connection monitoring intervals
@@ -185,6 +185,7 @@ void setup() {
 void loop() {
     static unsigned long last_wifi_check = 0;
     static unsigned long last_memory_report = 0;
+    static unsigned long last_clock_display = 0;
     unsigned long current_time = millis();
     
     // Always run WiFi manager
@@ -226,6 +227,12 @@ void loop() {
         // Initialize network services on first connection
         if (!services_initialized) {
             Serial.println("WiFi connected - initializing network services");
+
+            // Cancel offline mode if it was running
+            if (sign_controller) {
+                sign_controller->cancelOfflineMode();
+            }
+
             initializeNetworkServices();
         }
         
@@ -235,12 +242,11 @@ void loop() {
             if (mqtt_manager) {
                 mqtt_manager->loop();
             }
-            
-            // Handle OTA updates
-            // TODO: Implement SecureOTA
-            // if (ota_manager) {
-            //     ota_manager->loop();
-            // }
+
+            // Handle OTA updates (periodic checks for new firmware)
+            if (ota_manager) {
+                ota_manager->loop();
+            }
             
             // Perform periodic health checks
             if (current_time - last_health_check > HEALTH_CHECK_INTERVAL) {
@@ -253,19 +259,32 @@ void loop() {
                 syncTime();
                 last_time_sync = current_time;
             }
+
+            // Periodic clock display (every 60 seconds for 4 seconds, unless priority message active)
+            if (current_time - last_clock_display > CLOCK_DISPLAY_INTERVAL) {
+                if (sign_controller && !sign_controller->isInPriorityMode()) {
+                    sign_controller->displayClock();
+                    last_clock_display = current_time;
+                }
+            }
         }
-        
+
         // Short delay for online operation
         smartDelay(100);
     } else {
         // WiFi disconnected - show offline information
         services_initialized = false;
-        
+
         if (sign_controller) {
             sign_controller->showOfflineMode();
         }
-        
-        Serial.println("WiFi disconnected - displaying offline information");
+
+        // Throttle log message to once every 10 seconds
+        unsigned long current_time = millis();
+        if (current_time - last_offline_log > 10000) {
+            Serial.println("WiFi disconnected - displaying offline information");
+            last_offline_log = current_time;
+        }
     }
     
     // Always run sign controller loop for timing management
@@ -324,7 +343,15 @@ void initializeDevice() {
     }
     
     // Initialize random number generator
-    randomSeed(analogRead(0) + millis());
+    // Note: Cannot use analogRead(0) - GPIO0 is on ADC2 which conflicts with WiFi
+    // Use MAC address + millis() for entropy instead
+    uint8_t mac_bytes[6];
+    esp_read_mac(mac_bytes, ESP_MAC_WIFI_STA);
+    uint32_t seed = 0;
+    for (int i = 0; i < 6; i++) {
+        seed ^= (mac_bytes[i] << (i * 4));
+    }
+    randomSeed(seed ^ millis());
     
     Serial.println("Device hardware initialization complete");
 }
@@ -351,12 +378,27 @@ void initializeNetworkServices() {
             last_time_sync = millis();
         } else {
             Serial.println("Warning: NTP synchronization failed");
+            if (sign_controller) {
+                sign_controller->displayError("NTP Sync Failed", 5);
+            }
         }
         
-        // Initialize MQTT manager
+        // Initialize MQTT manager with zone name (per ESP32_BETABRITE_IMPLEMENTATION.md)
         Serial.println("Initializing MQTT manager...");
-        mqtt_manager = new MQTTManager(&wifi_client, device_id);
-        
+
+        // Extract zone name from configuration (myMenuItems[4])
+        String zone_name = String(myMenuItems[4].pdata);
+        if (zone_name.length() == 0) {
+            zone_name = SIGN_DEFAULT_ZONE;  // Fallback to default zone
+            Serial.print("Using default zone: ");
+            Serial.println(zone_name);
+        } else {
+            Serial.print("Using configured zone: ");
+            Serial.println(zone_name);
+        }
+
+        mqtt_manager = new MQTTManager(&wifi_client, device_id, zone_name);
+
         if (mqtt_manager) {
             // Configure MQTT from stored parameters
             if (strlen(myMenuItems[0].pdata) > 0) {
@@ -365,11 +407,24 @@ void initializeNetworkServices() {
                 mqtt_port = atoi(myMenuItems[1].pdata);
                 strcpy(mqtt_user, myMenuItems[2].pdata);
                 strcpy(mqtt_pass, myMenuItems[3].pdata);
-                
-                // Configure MQTT manager
-                if (mqtt_manager->configure(mqtt_server, mqtt_port, mqtt_user, mqtt_pass)) {
+
+                // Determine if TLS should be used based on port
+                // Ports 42690 (production) or 46942 (development) = TLS
+                // Port 1883 = basic MQTT (fallback)
+                bool use_tls = (mqtt_port == MQTT_TLS_PORT_PRODUCTION ||
+                               mqtt_port == MQTT_TLS_PORT_DEVELOPMENT);
+
+                Serial.print("MQTT Configuration - Server: ");
+                Serial.print(mqtt_server);
+                Serial.print(", Port: ");
+                Serial.print(mqtt_port);
+                Serial.print(", TLS: ");
+                Serial.println(use_tls ? "YES" : "NO");
+
+                // Configure MQTT manager with TLS option
+                if (mqtt_manager->configure(mqtt_server, mqtt_port, mqtt_user, mqtt_pass, use_tls)) {
                     mqtt_manager->setMessageCallback(handleMQTTMessage);
-                    
+
                     if (mqtt_manager->begin()) {
                         Serial.println("MQTT manager initialized successfully");
                     } else {
@@ -383,14 +438,59 @@ void initializeNetworkServices() {
             }
         }
         
-        // TODO: Initialize secure OTA manager when implementation is complete
-        // Serial.println("Initializing OTA update manager...");
-        // ota_manager = new SecureOTA(APP_VERSION, device_id);
-        
-        // Legacy OTA check (will be removed when SecureOTA is complete)
-        Serial.println("Performing legacy OTA check...");
-        checkForUpdates(APP_VERSION, ota_version_url, ota_firmware_url);
-        
+        // Initialize GitHub OTA manager
+        Serial.println("Initializing OTA update manager...");
+        ota_manager = new GitHubOTA(GITHUB_REPO_OWNER, GITHUB_REPO_NAME, &led_sign);
+
+        if (ota_manager) {
+            ota_manager->begin(APP_VERSION);
+
+            // Load GitHub token from SPIFFS (if available)
+            if (SPIFFS.begin(true)) {
+                Serial.println("OTA: SPIFFS mounted successfully");
+
+                File tokenFile = SPIFFS.open(GITHUB_TOKEN_PATH, "r");
+                if (tokenFile) {
+                    String token = tokenFile.readStringUntil('\n');
+                    token.trim();  // Remove whitespace/newlines
+                    tokenFile.close();
+
+                    if (token.length() > 0) {
+                        ota_manager->setGitHubToken(token.c_str());
+                        Serial.println("OTA: GitHub token loaded successfully");
+                    } else {
+                        Serial.println("OTA: Warning - GitHub token file is empty");
+                    }
+                } else {
+                    Serial.println("OTA: Info - No GitHub token found (public repo or token not uploaded)");
+                    Serial.println("OTA: To use private repos, upload token to SPIFFS at: " GITHUB_TOKEN_PATH);
+                }
+            } else {
+                Serial.println("OTA: Warning - SPIFFS mount failed, cannot load GitHub token");
+            }
+
+            // Configure OTA settings from defines.h
+            ota_manager->setCheckInterval(OTA_CHECK_INTERVAL_MS);
+            ota_manager->setAutoUpdate(OTA_AUTO_UPDATE_ENABLED);
+
+            // Optionally perform boot-time update check
+            if (OTA_BOOT_CHECK_ENABLED) {
+                Serial.println("OTA: Performing boot-time update check...");
+                if (ota_manager->checkForUpdate()) {
+                    if (ota_manager->isUpdateAvailable()) {
+                        Serial.printf("OTA: Update available - %s\n", ota_manager->getLatestVersion().c_str());
+                        // The periodic check will handle the update, or it can be triggered manually
+                    } else {
+                        Serial.println("OTA: Firmware is up to date");
+                    }
+                }
+            }
+
+            Serial.println("OTA: Manager initialized successfully");
+        } else {
+            Serial.println("OTA: Warning - Failed to create OTA manager");
+        }
+
         services_initialized = true;
         Serial.println("All network services initialized successfully");
         
@@ -405,11 +505,113 @@ void initializeNetworkServices() {
 }
 
 /**
+ * @brief Structure for display configuration presets
+ *
+ * Contains all display parameters for an alert level/category combination
+ */
+struct DisplayPreset {
+    char color_code;
+    char mode_code;
+    char charset_code;
+    char position_code;
+    const char* speed_code;
+    char effect_code;
+    bool priority;
+    unsigned int duration;
+};
+
+/**
+ * @brief Get display preset based on alert level and category
+ *
+ * Returns appropriate display configuration based on alert severity and type.
+ * Falls back to safe defaults if level/category not recognized.
+ *
+ * Alert Levels (by severity):
+ * - critical: Red, flash/newsflash, large text, priority, 60s
+ * - warning:  Amber, scroll, normal text, 30s
+ * - notice:   Green, wipein, normal text, 20s
+ * - info:     Green, rotate, normal text, 15s
+ *
+ * Categories influence special effects:
+ * - security: Bomb effect for visual urgency
+ * - weather:  Snow/weather-appropriate effects
+ * - automation: Welcome/completion effects
+ * - system/network: Subtle twinkle effects
+ *
+ * @param level Alert severity level ("critical", "warning", "notice", "info")
+ * @param category Alert category ("security", "weather", "automation", "system", etc.)
+ * @return DisplayPreset struct with appropriate display parameters
+ */
+DisplayPreset getDisplayPreset(const char* level, const char* category) {
+    DisplayPreset preset;
+
+    // Default safe values
+    preset.color_code = '2';        // Green
+    preset.mode_code = 'a';         // Rotate
+    preset.charset_code = '3';      // 7high
+    preset.position_code = ' ';     // Midline
+    preset.speed_code = "\027";     // Medium (3)
+    preset.effect_code = '0';       // Twinkle
+    preset.priority = false;
+    preset.duration = 15;
+
+    // Determine base preset by level
+    if (strcmp(level, "critical") == 0) {
+        preset.color_code = '1';     // Red
+        preset.mode_code = 'c';      // Flash
+        preset.charset_code = '6';   // 10high (large)
+        preset.position_code = '0';  // Fill
+        preset.speed_code = "\031";  // Fast (5)
+        preset.effect_code = 'Z';    // Bomb (urgent)
+        preset.priority = true;
+        preset.duration = 60;
+    } else if (strcmp(level, "warning") == 0) {
+        preset.color_code = '3';     // Amber
+        preset.mode_code = 'm';      // Scroll
+        preset.charset_code = '3';   // 7high
+        preset.position_code = '\"'; // Topline
+        preset.speed_code = "\027";  // Medium (3)
+        preset.effect_code = '0';    // Twinkle
+        preset.priority = false;
+        preset.duration = 30;
+    } else if (strcmp(level, "notice") == 0) {
+        preset.color_code = '2';     // Green
+        preset.mode_code = 'r';      // Wipein
+        preset.charset_code = '3';   // 7high
+        preset.position_code = ' ';  // Midline
+        preset.speed_code = "\027";  // Medium (3)
+        preset.effect_code = '8';    // Welcome
+        preset.priority = false;
+        preset.duration = 20;
+    }
+    // else: info or unknown - use defaults set above
+
+    // Modify effect based on category (overrides level-based effect for non-critical)
+    if (strcmp(level, "critical") != 0) {  // Don't override critical bomb effect
+        if (strcmp(category, "security") == 0) {
+            preset.effect_code = 'B';    // Trumpet (attention-getting)
+        } else if (strcmp(category, "weather") == 0) {
+            preset.effect_code = '2';    // Snow
+        } else if (strcmp(category, "automation") == 0) {
+            preset.effect_code = '8';    // Welcome/completion
+        } else if (strcmp(category, "system") == 0 || strcmp(category, "network") == 0) {
+            preset.effect_code = '0';    // Twinkle (subtle)
+        } else if (strcmp(category, "personal") == 0) {
+            preset.effect_code = '1';    // Sparkle (friendly)
+        }
+    }
+
+    return preset;
+}
+
+/**
  * @brief Handle incoming MQTT messages
- * 
+ *
  * Processes MQTT messages received from subscribed topics, validates them,
  * and routes them to appropriate handlers (message display, system commands).
- * 
+ * Supports JSON format with optional display_config. When display_config is
+ * missing, intelligent presets are applied based on alert level and category.
+ *
  * @param topic MQTT topic the message was received on
  * @param payload Message payload bytes
  * @param length Length of payload in bytes
@@ -420,12 +622,12 @@ void handleMQTTMessage(char* topic, uint8_t* payload, unsigned int length) {
         Serial.println("MQTT: Invalid message parameters");
         return;
     }
-    
+
     // Log received message
     Serial.print("MQTT Message [");
     Serial.print(topic);
     Serial.print("]: ");
-    
+
     // Convert payload to string
     String message;
     message.reserve(length + 1);
@@ -433,51 +635,127 @@ void handleMQTTMessage(char* topic, uint8_t* payload, unsigned int length) {
         message += (char)payload[i];
     }
     Serial.println(message);
-    
-    // Validate message using MessageParser
-    if (!MessageParser::validateMessage(message.c_str())) {
-        Serial.println("MQTT: Message validation failed");
-        return;
-    }
-    
-    // Handle system commands
-    if (MessageParser::isSystemCommand(message.c_str())) {
-        if (sign_controller) {
-            char command = message.charAt(0);
-            if (sign_controller->handleSystemCommand(command)) {
-                Serial.print("MQTT: System command ");
-                Serial.print(command);
-                Serial.println(" executed");
-                
-                // Handle factory reset command
-                if (command == '^') {
-                    handleSystemReset();
+
+    // Try to parse as JSON (Alert Manager format)
+    // Use MQTT_MAX_PACKET_SIZE from defines.h for JSON parsing buffer
+    DynamicJsonDocument doc(MQTT_MAX_PACKET_SIZE);
+    DeserializationError error = deserializeJson(doc, payload, length);
+
+    if (!error) {
+        // Successfully parsed as JSON - Extract alert fields
+        Serial.println("MQTT: Parsing JSON alert message");
+
+        // Extract core fields
+        const char* title = doc["title"] | "Alert";
+        const char* msg = doc["message"] | "";
+        const char* level = doc["level"] | "info";
+        const char* category = doc["category"] | "application";
+
+        // Build display text: "Title: Message"
+        String display_text = String(title) + ": " + String(msg);
+
+        Serial.print("  Level: ");
+        Serial.println(level);
+        Serial.print("  Category: ");
+        Serial.println(category);
+        Serial.print("  Display Text: ");
+        Serial.println(display_text);
+
+        // Extract display_config object
+        JsonObject displayConfig = doc["display_config"];
+
+        if (displayConfig && !displayConfig.isNull()) {
+            // Extract protocol codes from display_config
+            const char* mode_code = displayConfig["mode_code"] | "a";       // Default: rotate
+            const char* color_code = displayConfig["color_code"] | "2";     // Default: green
+            const char* charset_code = displayConfig["charset_code"] | "3"; // Default: 7high
+            const char* position_code = displayConfig["position_code"] | " "; // Default: midline
+            const char* speed_code = displayConfig["speed_code"] | "\027";  // Default: medium (3)
+            const char* effect_code = displayConfig["effect_code"] | "";     // Default: no effect (empty string)
+            bool priority = displayConfig["priority"] | false;
+            unsigned int duration = displayConfig["duration"] | 15;
+
+            Serial.println("  Display Config:");
+            Serial.print("    Mode: ");
+            Serial.println(mode_code);
+            Serial.print("    Color: ");
+            Serial.println(color_code);
+            Serial.print("    Priority: ");
+            Serial.println(priority ? "YES" : "NO");
+            Serial.print("    Duration: ");
+            Serial.print(duration);
+            Serial.println(" seconds");
+
+            // Convert JSON codes to BetaBrite constants
+            char mode = mode_code[0];
+            char color = color_code[0];
+            char charset = charset_code[0];
+            char position = position_code[0];
+            char special = (effect_code && strlen(effect_code) > 0) ? effect_code[0] : 0;
+
+            // Display message based on priority
+            if (sign_controller) {
+                if (priority) {
+                    // Priority message with dynamic duration
+                    sign_controller->displayPriorityMessage(display_text.c_str(), duration);
+                } else {
+                    // Normal message with display config (including charset and speed)
+                    sign_controller->displayMessage(display_text.c_str(), color, position, mode, special,
+                                                   charset, speed_code);
+                }
+            }
+        } else {
+            // No display_config - apply intelligent preset based on level/category
+            Serial.println("  No display_config found - applying preset based on level/category");
+
+            DisplayPreset preset = getDisplayPreset(level, category);
+
+            Serial.println("  Applied Preset:");
+            Serial.print("    Level: ");
+            Serial.println(level);
+            Serial.print("    Category: ");
+            Serial.println(category);
+            Serial.print("    Color: ");
+            Serial.println(preset.color_code);
+            Serial.print("    Mode: ");
+            Serial.println(preset.mode_code);
+            Serial.print("    Effect: ");
+            Serial.println(preset.effect_code);
+            Serial.print("    Priority: ");
+            Serial.println(preset.priority ? "YES" : "NO");
+            Serial.print("    Duration: ");
+            Serial.print(preset.duration);
+            Serial.println(" seconds");
+
+            if (sign_controller) {
+                if (preset.priority) {
+                    // Critical alert - use priority message
+                    sign_controller->displayPriorityMessage(display_text.c_str(), preset.duration);
+                } else {
+                    // Normal alert - display with preset configuration
+                    sign_controller->displayMessage(
+                        display_text.c_str(),
+                        preset.color_code,
+                        preset.position_code,
+                        preset.mode_code,
+                        preset.effect_code,
+                        preset.charset_code,
+                        preset.speed_code
+                    );
                 }
             }
         }
         return;
     }
-    
-    // Handle priority messages
-    if (MessageParser::isPriorityMessage(message.c_str())) {
-        if (sign_controller) {
-            String priority_content = message.substring(1); // Remove * prefix
-            sign_controller->displayPriorityMessage(priority_content.c_str());
-        }
-        return;
-    }
-    
-    // Handle normal messages with option parsing
-    char color, position, mode, special;
-    String message_content;
-    
-    if (MessageParser::parseMessage(message.c_str(), &color, &position, &mode, &special, &message_content)) {
-        if (sign_controller) {
-            sign_controller->displayMessage(message_content.c_str(), color, position, mode, special);
-        }
-    } else {
-        Serial.println("MQTT: Message parsing failed");
-    }
+
+    // JSON parsing failed - message might be legacy format or invalid
+    Serial.print("MQTT: JSON parse failed - ");
+    Serial.println(error.c_str());
+    Serial.println("MQTT: Treating as invalid message (bracket notation no longer supported)");
+
+    // Log the rejection
+    Serial.println("MQTT: Message rejected - only JSON format supported");
+    Serial.println("MQTT: Expected format: {\"title\":\"...\", \"message\":\"...\", \"display_config\":{...}}");
 }
 
 /**
@@ -517,9 +795,21 @@ void performHealthCheck() {
     }
     
     // Check MQTT connectivity
+    static int mqtt_fail_count = 0;
     if (mqtt_manager && mqtt_manager->isConfigured()) {
         if (!mqtt_manager->isConnected()) {
             Serial.println("Warning: MQTT disconnected");
+            mqtt_fail_count++;
+
+            // After 3 consecutive failed health checks (90 seconds), show error on sign
+            if (mqtt_fail_count >= 3 && sign_controller) {
+                String status = mqtt_manager->getConnectionStatus();
+                String error_msg = "MQTT: " + status;
+                sign_controller->displayError(error_msg.c_str(), 10);
+                mqtt_fail_count = 0; // Reset counter after displaying error
+            }
+        } else {
+            mqtt_fail_count = 0; // Reset counter when connected
         }
     }
     
@@ -533,7 +823,18 @@ void performHealthCheck() {
     static int health_counter = 0;
     if (health_counter++ % 10 == 0 && sign_controller && !sign_controller->isInPriorityMode()) {
         // Show a quick health indicator every 10th health check (5 minutes)
-        String health_msg = "OK " + WiFi.localIP().toString();
+        String health_msg = "System OK";
+
+        // Add MQTT status indicator
+        if (mqtt_manager && mqtt_manager->isConfigured()) {
+            if (mqtt_manager->isConnected()) {
+                health_msg += " [MQTT OK]";
+            }
+        }
+
+        // Add IP address
+        health_msg += " " + WiFi.localIP().toString();
+
         sign_controller->displayMessage(health_msg.c_str(), BB_COL_GREEN, BB_DP_TOPLINE, BB_DM_HOLD, BB_SDM_TWINKLE);
     }
 }
@@ -547,21 +848,24 @@ void performHealthCheck() {
  */
 void syncTime() {
     Serial.println("Synchronizing time with NTP server...");
-    
+
     configTzTime(timezone_posix, ntp_server);
     delay(1000); // Give NTP time to sync
-    
+
     struct tm timeinfo;
     if (getLocalTime(&timeinfo)) {
         Serial.print("Time synchronized: ");
         Serial.print(asctime(&timeinfo));
-        
+
         // Display current time on sign
         if (sign_controller && !sign_controller->isInPriorityMode()) {
             sign_controller->displayClock();
         }
     } else {
         Serial.println("Warning: NTP synchronization failed");
+        if (sign_controller) {
+            sign_controller->displayError("NTP Sync Failed", 5);
+        }
     }
 }
 

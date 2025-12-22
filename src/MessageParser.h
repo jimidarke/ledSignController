@@ -1,15 +1,23 @@
 /**
  * @file MessageParser.h
  * @brief Message parsing utilities for LED Sign Controller
- * 
- * This module handles parsing of incoming MQTT messages, including:
+ *
+ * ⚠️  DEPRECATED - This module is no longer used ⚠️
+ *
+ * As of version 0.2.0, the LED Sign Controller uses JSON-only message format
+ * for Alert Manager integration. This bracket notation parser is kept for
+ * reference purposes only.
+ *
+ * Previously handled:
  * - Option parsing from bracket notation [color,effect]
  * - Priority message handling (*message)
  * - System command processing (#clear, ^reset)
  * - Input validation and sanitization
- * 
+ *
+ * @deprecated Use JSON format with handleMQTTMessage() in main.cpp
+ * @see docs/ESP32_BETABRITE_IMPLEMENTATION.md for current message format
  * @author LED Sign Controller Project
- * @version 0.1.4
+ * @version 0.1.4 (deprecated)
  * @date 2024
  */
 

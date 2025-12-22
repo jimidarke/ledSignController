@@ -63,18 +63,24 @@
 
 #define MAX_MQTT_SERVER_LEN      34
 #define MAX_MQTT_PORT_LEN        6
+#define MAX_ZONE_NAME_LEN        16
 
-char MQTT_Server [MAX_MQTT_SERVER_LEN + 1]    = "mqtt";
-char MQTT_Port   [MAX_MQTT_PORT_LEN + 1]      = "1883";
+// MQTT Configuration
+char MQTT_Server [MAX_MQTT_SERVER_LEN + 1]    = "alert.d-t.pw";
+char MQTT_Port   [MAX_MQTT_PORT_LEN + 1]      = "1883";  // Basic MQTT port (no TLS)
 char MQTT_User   [MAX_MQTT_SERVER_LEN + 1]    = "";
 char MQTT_Pass   [MAX_MQTT_SERVER_LEN + 1]    = "";
+
+// Zone Configuration (per ESP32_BETABRITE_IMPLEMENTATION.md)
+char Zone_Name   [MAX_ZONE_NAME_LEN + 1]      = "default";
 
 MenuItem myMenuItems [] =
 {
   { "mqt", "MQTT Server",   MQTT_Server,    MAX_MQTT_SERVER_LEN },
   { "mqp", "MQTT Port",     MQTT_Port,      MAX_MQTT_PORT_LEN   },
-  { "mqu", "MQTT User",     MQTT_User,      MAX_MQTT_SERVER_LEN   },
-  { "mqd", "MQTT Pass",     MQTT_Pass,      MAX_MQTT_SERVER_LEN   }
+  { "mqu", "MQTT User",     MQTT_User,      MAX_MQTT_SERVER_LEN },
+  { "mqd", "MQTT Pass",     MQTT_Pass,      MAX_MQTT_SERVER_LEN },
+  { "zon", "Sign Zone",     Zone_Name,      MAX_ZONE_NAME_LEN   }
 };
 
 uint16_t NUM_MENU_ITEMS = sizeof(myMenuItems) / sizeof(MenuItem);  //MenuItemSize;

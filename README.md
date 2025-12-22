@@ -1,8 +1,8 @@
 # LED Sign Controller
 
-A comprehensive ESP32-based controller for BetaBrite/Alpha Protocol LED signs with WiFi connectivity, MQTT integration, and advanced message management.
+A comprehensive ESP32-based controller for BetaBrite/Alpha Protocol LED signs with WiFi connectivity, secure MQTT integration, and Alert Manager support for centralized notification management.
 
-![Version](https://img.shields.io/badge/version-0.1.4-blue.svg)
+![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-ESP32-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-yellow.svg)
 ![Build](https://img.shields.io/badge/build-PlatformIO-orange.svg)
@@ -10,25 +10,35 @@ A comprehensive ESP32-based controller for BetaBrite/Alpha Protocol LED signs wi
 ## 🌟 Features
 
 ### Core Functionality
-- **Remote Message Control**: Send messages via MQTT with rich formatting options
-- **Priority Messaging**: Urgent messages that interrupt normal operation
-- **Automatic Clock Display**: NTP-synchronized time display with timezone support
-- **WiFi Portal**: Easy setup via captive portal when offline
-- **Over-The-Air Updates**: Secure firmware updates with rollback protection
+- **Alert Manager Integration**: JSON-based alert messages with centralized notification management
+- **Priority Messaging**: Critical alerts that interrupt normal operation with configurable durations
+- **Intelligent Display Presets**: Automatic formatting based on alert level and category
+- **Zone-Based Routing**: Multi-sign deployments with independent zone control
+- **Automatic Clock Display**: NTP-synchronized time display every 60 seconds (4-second duration)
+- **Visual Error Reporting**: System errors displayed on sign for immediate user feedback
+- **System Health Status**: Periodic health indicators with MQTT connectivity status
+- **WiFi Portal**: Easy setup via captive portal when offline (non-blocking display sequence)
+- **Over-The-Air Updates**: GitHub Releases-based firmware updates with HTTPS, SHA256 verification, and automatic rollback
 - **Telemetry**: Real-time monitoring of device health and performance
 
 ### Message Features
-- **Rich Text Formatting**: Colors, animations, and special effects using bracket notation
+- **JSON Message Format**: Structured alert messages with full protocol code access
+- **Alert Levels**: Critical, warning, notice, and info severity levels
+- **Alert Categories**: Security, weather, automation, system, network, and personal
+- **Full BetaBrite Protocol**: Complete access to colors, modes, effects, charset, speed, and positioning
+- **Display Presets**: Intelligent defaults when display_config is omitted
 - **Message Queuing**: Automatic rotation through multiple message files
-- **System Commands**: Clear display, factory reset, and diagnostic functions
-- **Input Validation**: Robust message parsing with security checks
-- **Multi-Protocol Support**: BetaBrite Alpha protocol with RS232/TTL interface
 
 ### Network & Security
-- **Secure MQTT**: TLS support with authentication and exponential backoff
-- **Network Resilience**: Automatic reconnection with graceful degradation
+- **Mutual TLS Authentication**: Certificate-based client authentication with CA verification
+- **Secure MQTT (TLS 1.3)**: Encrypted communication on port 42690 (production) or 46942 (development)
+- **Certificate Management**: SPIFFS-based certificate storage with graceful fallback
+- **Zone-Based Topics**: Subscribe to `ledSign/{zone}/message` for targeted delivery
+- **Persistent Sessions**: QoS Level 1 with clean session = false for reliable delivery
+- **Network Resilience**: Automatic reconnection with exponential backoff and visual status
 - **Memory Management**: Heap monitoring and leak detection
-- **Error Recovery**: Comprehensive error handling and automatic recovery
+- **Error Recovery**: Comprehensive error handling with automatic recovery and sign display
+- **Non-Blocking Architecture**: All operations use state machines to prevent system freezes
 
 ## 🚀 Quick Start
 
@@ -66,55 +76,121 @@ A comprehensive ESP32-based controller for BetaBrite/Alpha Protocol LED signs wi
    // Add your specific settings here
    ```
 
-3. **Build and upload**
+3. **Configure GitHub OTA Updates** (in `src/defines.h`)
+   ```cpp
+   // Update these with your GitHub repository
+   #define GITHUB_REPO_OWNER         "yourusername"
+   #define GITHUB_REPO_NAME          "ledSignController"
+   ```
+
+4. **Install TLS certificates** (required for production)
+   ```bash
+   # Place certificates in data/certs/
+   cp /path/to/ca.crt data/certs/
+   cp /path/to/client.crt data/certs/
+   cp /path/to/client.key data/certs/
+
+   # Upload filesystem to ESP32
+   pio run -t uploadfs
+   ```
+   See `data/certs/README.md` for detailed certificate instructions.
+
+5. **Install GitHub token** (optional, for private repositories)
+   ```bash
+   # Create GitHub Personal Access Token at https://github.com/settings/tokens
+   # Save token to data/github_token.txt
+   echo "ghp_your_token_here" > data/github_token.txt
+
+   # Upload filesystem to ESP32
+   pio run -t uploadfs
+   ```
+   See `docs/OTA_DEPLOYMENT.md` for detailed OTA setup instructions.
+
+6. **Build and upload firmware**
    ```bash
    pio run -t upload
    pio device monitor
    ```
 
-4. **Initial setup**
+7. **Initial setup**
    - Device creates WiFi hotspot "LEDSign" (password: "ledsign0")
-   - Connect and configure WiFi + MQTT settings
+   - Connect and configure: WiFi, MQTT server (alert.d-t.pw:42690), and Zone name
    - Device automatically connects and starts operation
 
 ## 📡 MQTT Integration
 
-### Connection Topics
+### Zone-Based Topics
 
-| Topic | Direction | Purpose | Retained |
-|-------|-----------|---------|----------|
-| `ledSign/{DEVICE_ID}/message` | Subscribe | Device-specific messages | No |
-| `ledSign/message` | Subscribe | Broadcast messages | No |
-| `ledSign/{DEVICE_ID}/rssi` | Publish | WiFi signal strength | Yes |
-| `ledSign/{DEVICE_ID}/ip` | Publish | Device IP address | Yes |
-| `ledSign/{DEVICE_ID}/uptime` | Publish | Device uptime (seconds) | Yes |
-| `ledSign/{DEVICE_ID}/memory` | Publish | Free memory (bytes) | Yes |
+The controller uses zone-based MQTT topics for targeted message delivery in multi-sign deployments.
 
-### Message Format Examples
+| Topic | Direction | Purpose | QoS | Retained |
+|-------|-----------|---------|-----|----------|
+| `ledSign/{ZONE}/message` | Subscribe | Zone-specific alert messages (JSON) | 1 | No |
+| `ledSign/{DEVICE_ID}/rssi` | Publish | WiFi signal strength | 0 | Yes |
+| `ledSign/{DEVICE_ID}/ip` | Publish | Device IP address | 0 | Yes |
+| `ledSign/{DEVICE_ID}/uptime` | Publish | Device uptime (seconds) | 0 | Yes |
+| `ledSign/{DEVICE_ID}/memory` | Publish | Free memory (bytes) | 0 | Yes |
 
-#### Basic Messages
-```
-Hello World
+**Client ID Format**: `esp32-betabrite-{zone}-{mac}`
+**Persistent Sessions**: Enabled (clean session = false)
+**TLS Ports**: 42690 (production), 46942 (development)
+
+### JSON Message Format
+
+All messages must be in JSON format per the Alert Manager specification. See `test/sample_alerts.json` for comprehensive examples.
+
+#### Minimal Alert (uses intelligent presets)
+```json
+{
+  "title": "Low Disk Space",
+  "message": "Server storage at 85% capacity",
+  "level": "warning",
+  "category": "system"
+}
 ```
 
-#### Rich Formatted Messages
-```
-[red]Emergency Alert
-[green,rotate]Status: Online
-[amber,snow]Winter Weather Advisory
-[rainbow1,explode]Celebration Time!
+The system will automatically apply display presets based on level:
+- **critical**: Red, flash, large text (10high), priority mode, 60s duration
+- **warning**: Amber, scroll, normal text, 30s duration
+- **notice**: Green, wipein, 20s duration
+- **info**: Green, rotate, 15s duration
+
+Category influences special effects (security=trumpet, weather=snow, etc.)
+
+#### Full Alert with Display Configuration
+```json
+{
+  "timestamp": 1704045600,
+  "level": "critical",
+  "category": "security",
+  "title": "Intruder Alert",
+  "message": "Motion detected at front door",
+  "display_config": {
+    "mode_code": "c",
+    "color_code": "1",
+    "charset_code": "6",
+    "position_code": "0",
+    "speed_code": "\\031",
+    "effect_code": "Z",
+    "priority": true,
+    "duration": 60
+  },
+  "source": "security-system-01",
+  "zone": "kitchen"
+}
 ```
 
-#### Priority Messages (interrupt normal operation)
-```
-*URGENT: Building Evacuation Required
-```
+#### Protocol Code Reference
+| Parameter | Options | Examples |
+|-----------|---------|----------|
+| **mode_code** | Display animation | `a`=rotate, `m`=scroll, `c`=flash, `r`=wipein, `A`=newsflash |
+| **color_code** | Text color | `1`=red, `2`=green, `3`=amber, `9`=rainbow1 |
+| **charset_code** | Font size | `3`=7high, `6`=10high (large), `5`=7highfancy |
+| **position_code** | Vertical position | `0`=fill, `"`=topline, ` `=midline |
+| **speed_code** | Animation speed | `\026`=slow (2), `\027`=medium (3), `\031`=fast (5) |
+| **effect_code** | Special effect | `Z`=bomb, `0`=twinkle, `2`=snow, `B`=trumpet |
 
-#### System Commands
-```
-#          Clear all messages
-^          Factory reset device
-```
+See `docs/BETABRITE.md` for complete protocol documentation.
 
 ### Display Capabilities
 
@@ -172,7 +248,7 @@ mqtt:
 
 ### Automation Examples
 
-#### Weather Alerts
+#### Weather Alerts (JSON Format)
 ```yaml
 automation:
   - alias: "Weather Alert to LED Sign"
@@ -186,11 +262,17 @@ automation:
     action:
       - service: mqtt.publish
         data:
-          topic: "ledSign/YOUR_DEVICE_ID/message"
-          payload: "*[red,flash]Weather Alert: {{ trigger.to_state.attributes.weather_alerts[0].title }}"
+          topic: "ledSign/kitchen/message"  # Replace with your zone
+          payload: >
+            {
+              "level": "warning",
+              "category": "weather",
+              "title": "Weather Alert",
+              "message": "{{ trigger.to_state.attributes.weather_alerts[0].title }}"
+            }
 ```
 
-#### Daily Greetings
+#### Daily Greetings (with Display Config)
 ```yaml
 automation:
   - alias: "Morning Greeting"
@@ -200,8 +282,41 @@ automation:
     action:
       - service: mqtt.publish
         data:
-          topic: "ledSign/YOUR_DEVICE_ID/message"
-          payload: "[green,welcome]Good Morning! Have a great day!"
+          topic: "ledSign/kitchen/message"  # Replace with your zone
+          payload: >
+            {
+              "level": "info",
+              "category": "personal",
+              "title": "Good Morning",
+              "message": "Have a great day!",
+              "display_config": {
+                "mode_code": "r",
+                "color_code": "2",
+                "effect_code": "8",
+                "duration": 20
+              }
+            }
+```
+
+#### Critical Security Alert
+```yaml
+automation:
+  - alias: "Security Breach Alert"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.front_door
+        to: "on"
+    action:
+      - service: mqtt.publish
+        data:
+          topic: "ledSign/office/message"
+          payload: >
+            {
+              "level": "critical",
+              "category": "security",
+              "title": "Intruder Alert",
+              "message": "Motion detected at front door"
+            }
 ```
 
 ## 🔧 Configuration
@@ -213,10 +328,37 @@ Configured via captive portal when device is offline:
 - Static IP (optional): Manual IP configuration
 
 ### MQTT Settings
-- **Server**: MQTT broker hostname/IP
-- **Port**: MQTT port (default: 1883)
-- **Username**: MQTT authentication username
-- **Password**: MQTT authentication password
+- **Server**: MQTT broker hostname/IP (default: alert.d-t.pw)
+- **Port**: MQTT port (42690 for TLS production, 46942 for TLS development, 1883 for insecure fallback)
+- **Username**: MQTT authentication username (optional with certificates)
+- **Password**: MQTT authentication password (optional with certificates)
+- **Zone**: Sign zone name for topic routing (default: "default")
+
+### TLS Certificate Setup
+
+For production Alert Manager integration, TLS certificates are required:
+
+1. **Obtain certificates from Alert Manager administrator**
+   - CA certificate (`ca.crt`) - Verifies broker identity
+   - Client certificate (`client.crt`) - Authenticates this device
+   - Client private key (`client.key`) - Private key for client cert
+
+2. **Install certificates**
+   ```bash
+   # Place in data/certs/ directory
+   cp ca.crt data/certs/
+   cp client.crt data/certs/
+   cp client.key data/certs/
+
+   # Upload filesystem to ESP32
+   pio run -t uploadfs
+   ```
+
+3. **Verify installation**
+   - Watch serial monitor for: "MQTTManager: All certificates configured successfully"
+   - If certificates fail to load, system falls back to insecure MQTT (port 1883)
+
+See `data/certs/README.md` for detailed certificate management instructions.
 
 ### Sign Settings
 Configurable in `src/defines.h`:
@@ -226,12 +368,16 @@ Configurable in `src/defines.h`:
 #define SIGN_MAX_FILES 5                    // Number of message files
 #define SIGN_DEFAULT_COLOUR BB_COL_GREEN    // Default text color
 #define SIGN_DEFAULT_MODE BB_DM_ROTATE      // Default display mode
-#define SIGN_SHOW_CLOCK_DELAY_MS 10000      // Clock display duration
 
 // Clock settings
 #define SIGN_CLOCK_COLOUR BB_COL_AMBER      // Clock text color
 #define SIGN_CLOCK_MODE BB_DM_HOLD          // Clock display mode
 #define SIGN_TIMEZONE_POSIX "MST7MDT,M3.2.0,M11.1.0"  // Mountain Time
+
+// Display timing (in main.cpp)
+const unsigned long CLOCK_DISPLAY_INTERVAL = 60000;      // Show clock every 60 seconds
+const unsigned long CLOCK_DISPLAY_DURATION = 4000;       // Clock shows for 4 seconds
+const unsigned long HEALTH_CHECK_INTERVAL = 30000;       // System health check every 30 seconds
 
 // Network timeouts
 #define WIFI_TIMEOUT_MS 30000               // WiFi connection timeout
@@ -244,19 +390,36 @@ Configurable in `src/defines.h`:
 ```
 ledSignController/
 ├── src/                          # Source code
-│   ├── main.cpp                  # Main application entry point
-│   ├── MessageParser.h/.cpp      # Message parsing and validation
-│   ├── MQTTManager.h/.cpp        # MQTT connection management
-│   ├── SignController.h/.cpp     # LED sign control interface
-│   ├── SecureOTA.h/.cpp          # Secure OTA update system
-│   └── defines.h                 # Configuration constants
+│   ├── main.cpp                  # Main application with JSON alert handling
+│   ├── MessageParser.h/.cpp      # DEPRECATED: Legacy bracket notation (v0.1.x)
+│   ├── MQTTManager.h/.cpp        # MQTT with TLS and zone routing
+│   ├── SignController.h/.cpp     # LED sign control with full protocol support
+│   ├── SecureOTA.h               # PLANNED: Advanced OTA with signature verification
+│   └── defines.h                 # Configuration constants (version, GitHub repo, OTA settings)
 ├── lib/                          # Project libraries
-│   ├── BETABRITE/               # BetaBrite sign protocol
-│   ├── OTAupdate/               # Legacy OTA (deprecated)
-│   └── ArduinoJson/             # JSON parsing library
+│   ├── BETABRITE/               # BetaBrite Alpha protocol implementation
+│   ├── GitHubOTA/               # GitHub Releases-based OTA with HTTPS and SHA256 verification
+│   ├── OTAupdate/               # DEPRECATED: Legacy OTA (v0.1.x)
+│   └── README                   # Library documentation
 ├── include/                      # Header files and credentials
-├── docs/                         # Documentation and examples
-├── platformio.ini               # PlatformIO configuration
+│   ├── dynamicParams.h          # WiFi portal parameters (MQTT, Zone)
+│   └── Credentials.h            # WiFi credentials (not in repo)
+├── data/                         # Filesystem data (uploaded via uploadfs)
+│   ├── certs/                   # TLS certificates
+│   │   ├── README.md            # Certificate installation guide
+│   │   ├── ca.crt               # CA certificate (not in repo)
+│   │   ├── client.crt           # Client certificate (not in repo)
+│   │   └── client.key           # Private key (not in repo)
+│   └── github_token.txt         # GitHub Personal Access Token for OTA (not in repo)
+├── test/                         # Testing resources
+│   └── sample_alerts.json       # Example alert messages for testing
+├── docs/                         # Comprehensive documentation
+│   ├── ESP32_BETABRITE_IMPLEMENTATION.md  # Alert Manager integration spec
+│   ├── OTA_DEPLOYMENT.md        # GitHub-based OTA update deployment guide
+│   ├── GITHUB_ACTIONS_OTA.md    # Automated releases with GitHub Actions
+│   ├── CLIENTNODE.md            # Client node architecture
+│   └── BETABRITE.md             # Complete protocol reference
+├── platformio.ini               # PlatformIO configuration with SPIFFS
 └── README.md                    # This file
 ```
 
@@ -300,12 +463,32 @@ pio test
 ```
 
 #### Integration Testing
-```bash
-# Test MQTT connectivity
-mosquitto_pub -h localhost -t "ledSign/test/message" -m "[green]Test Message"
 
-# Test system commands
-mosquitto_pub -h localhost -t "ledSign/test/message" -m "#"
+**Testing without TLS** (development only):
+```bash
+# Test with minimal JSON alert
+mosquitto_pub -h localhost -p 1883 -t "ledSign/kitchen/message" \
+  -m '{"level":"info","category":"system","title":"Test","message":"System operational"}'
+
+# Test critical alert (triggers priority mode)
+mosquitto_pub -h localhost -p 1883 -t "ledSign/kitchen/message" \
+  -m '{"level":"critical","category":"security","title":"Test Alert","message":"Emergency test"}'
+```
+
+**Testing with TLS** (production):
+```bash
+# Test with TLS certificates
+mosquitto_pub -h alert.d-t.pw -p 42690 \
+  --cafile data/certs/ca.crt \
+  --cert data/certs/client.crt \
+  --key data/certs/client.key \
+  -t "ledSign/kitchen/message" \
+  -m @test/sample_alerts.json
+
+# Validate from sample alerts file
+jq '.alerts.info_system' test/sample_alerts.json | \
+  mosquitto_pub -h alert.d-t.pw -p 42690 --cafile ca.crt --cert client.crt --key client.key \
+  -t "ledSign/office/message" -l
 ```
 
 ### Contributing
@@ -318,47 +501,192 @@ mosquitto_pub -h localhost -t "ledSign/test/message" -m "#"
 
 ## 🔒 Security Considerations
 
-### Current Security Features
-- Input validation and sanitization
-- Buffer overflow protection
-- Exponential backoff for connection attempts
-- Memory usage monitoring
+### Current Security Features ✅
+- **Mutual TLS Authentication**: Certificate-based client authentication (v0.2.0)
+- **Encrypted Communication**: TLS 1.3 for MQTT on port 42690/46942
+- **Certificate Management**: SPIFFS-based cert storage with validation
+- **JSON Input Validation**: Strict message parsing with type checking
+- **Buffer Overflow Protection**: Safe string handling with length limits
+- **Exponential Backoff**: Connection retry with increasing delays
+- **Memory Monitoring**: Heap usage tracking and leak detection
+- **Secure Fallback**: Graceful degradation on certificate failure
 
 ### Security Recommendations
-1. **Use TLS/SSL** for MQTT connections in production
-2. **Change default passwords** for WiFi portal
-3. **Implement MQTT authentication** with unique credentials
-4. **Regular updates** via secure OTA mechanism
-5. **Network segmentation** for IoT devices
+1. ✅ **Use TLS/SSL** for MQTT connections in production (implemented v0.2.0)
+2. ⚠️ **Change default passwords** for WiFi portal
+3. ✅ **Certificate-based auth** with unique device certificates (implemented v0.2.0)
+4. ✅ **Secure OTA updates** via GitHub Releases with HTTPS and checksums (implemented v0.2.0)
+5. ✅ **Network segmentation** for IoT devices (use VLANs/firewall rules)
+6. ⚠️ **Certificate rotation** - Monitor expiration and renew before 5-year limit
+7. ⚠️ **Physical security** - SPIFFS is not encrypted, physical access = certificate/token access
+8. ⚠️ **GitHub token management** - Use minimal scope, rotate periodically, enable 2FA
+
+### Certificate and Token Security
+- **CA Certificate**: Shared across all devices, validates broker identity
+- **Client Certificate**: Unique per device, identifies this ESP32 to broker
+- **Private Key**: Unique per device, MUST be kept secret
+- **GitHub Token**: Repository access token for OTA updates (private repos only)
+- **Storage**: All stored in SPIFFS (unencrypted) - consider ESP32 flash encryption for high-security deployments
+- **Expiration**: Certificates have typical 5-year validity - implement monitoring for renewal
+- **Token Scope**: Use minimal scope (`repo` for private, `public_repo` for public)
 
 ### Planned Security Enhancements
 - Cryptographic firmware signature verification
-- Certificate-based authentication
-- Encrypted configuration storage
-- Intrusion detection and response
+- ESP32 flash encryption for certificate protection
+- Secure element integration (ATECC608A)
+- Intrusion detection and tamper response
 
 ## 🔄 OTA Updates
 
-### Current Implementation
-- HTTP-based version checking
-- Automatic download and installation
-- Basic error handling and recovery
+### GitHub Releases-Based OTA System
 
-### Secure OTA Roadmap
-- HTTPS-only downloads with certificate validation
-- Cryptographic signature verification
-- Rollback capability for failed updates
-- User consent and scheduling options
-- Progress reporting and status updates
+The controller uses GitHub Releases for secure, reliable firmware distribution with automatic updates.
 
-### Manual OTA Update
+**Features**:
+- ✅ **HTTPS-only downloads** with certificate validation
+- ✅ **SHA256 checksum verification** to prevent corrupted firmware
+- ✅ **Semantic versioning** (0.2.0 → 0.2.1) with automatic downgrade prevention
+- ✅ **Automatic periodic checks** (default: every 24 hours, configurable)
+- ✅ **LED sign feedback** during update process
+- ✅ **Rollback protection** - previous firmware retained until new firmware validates
+- ✅ **Public or private repository** support
+
+### Configuration
+
+1. **Set your GitHub repository** in `src/defines.h`:
+   ```cpp
+   #define GITHUB_REPO_OWNER         "yourusername"
+   #define GITHUB_REPO_NAME          "ledSignController"
+   #define FIRMWARE_VERSION          "0.2.0"
+   ```
+
+2. **For private repositories**, create a GitHub Personal Access Token:
+   - Visit https://github.com/settings/tokens
+   - Create token with `repo` scope
+   - Save to `data/github_token.txt`
+   - Upload: `pio run -t uploadfs`
+
+3. **Configure update behavior** (optional):
+   ```cpp
+   #define OTA_CHECK_INTERVAL_HOURS  24      // Check frequency
+   #define OTA_AUTO_UPDATE_ENABLED   true    // Auto-install updates
+   #define OTA_BOOT_CHECK_ENABLED    false   // Check on boot
+   ```
+
+### Creating a Release
+
+When you're ready to deploy a new firmware version:
+
 ```bash
-# Check current version
-mosquitto_pub -h broker -t "ledSign/DEVICE_ID/command" -m "version"
+# 1. Update version in src/defines.h
+#define FIRMWARE_VERSION          "0.2.1"
 
-# Trigger update check
-mosquitto_pub -h broker -t "ledSign/DEVICE_ID/command" -m "update_check"
+# 2. Build firmware
+pio run -t clean
+pio run
+
+# 3. Generate SHA256 checksum
+cd .pio/build/esp32dev/
+sha256sum firmware.bin > firmware.sha256
+
+# 4. Create GitHub release with tag v0.2.1
+#    Upload both firmware.bin and firmware.sha256 as release assets
 ```
+
+**Using GitHub CLI**:
+```bash
+gh release create v0.2.1 \
+  --title "Version 0.2.1" \
+  --notes "Bug fixes and improvements" \
+  .pio/build/esp32dev/firmware.bin \
+  .pio/build/esp32dev/firmware.sha256
+```
+
+### Update Process
+
+1. Device checks GitHub Releases API every 24 hours (configurable)
+2. Compares latest release version with current firmware version
+3. If newer version available:
+   - Displays "CHECKING FOR UPDATES" on sign
+   - Downloads `firmware.bin` over HTTPS
+   - Downloads `firmware.sha256` checksum file
+   - Displays "DOWNLOADING" on sign
+   - Verifies checksum matches (prevents corruption)
+   - Displays "INSTALLING XX%" with progress
+   - Displays "VERIFYING CHECKSUM"
+   - Flashes new firmware to ESP32
+   - Displays "UPDATE COMPLETE - REBOOTING"
+   - Reboots device with new firmware
+4. If update fails at any stage, device continues running current firmware
+
+### Serial Monitor Output
+
+Successful update:
+```
+GitHubOTA: Periodic update check triggered
+GitHubOTA: Latest release: 0.2.1
+GitHubOTA: Update available: 0.2.0 -> 0.2.1
+GitHubOTA: Downloading firmware from https://github.com/...
+GitHubOTA: Firmware size: 896.5 KB
+GitHubOTA: Progress: 50%
+GitHubOTA: Download complete
+GitHubOTA: Checksum verified OK
+GitHubOTA: Firmware flashed successfully
+GitHubOTA: Update successful, rebooting...
+```
+
+### Troubleshooting
+
+See `docs/OTA_DEPLOYMENT.md` for comprehensive troubleshooting, including:
+- GitHub API configuration issues
+- Token authentication problems
+- Checksum verification failures
+- Network connectivity issues
+- Partition scheme problems
+
+### Security Notes
+
+**Current Security Level: BASIC (Sufficient for most deployments)**
+
+✅ Implemented:
+- HTTPS downloads (prevents man-in-the-middle attacks)
+- SHA256 checksums (prevents corrupted downloads)
+- Semantic versioning (prevents accidental downgrades)
+- GitHub token stored in SPIFFS (not hardcoded)
+
+❌ Not Implemented (advanced security):
+- Cryptographic signature verification (see `SecureOTA.h` for planned design)
+- Would require private key management
+
+**Best Practices**:
+- Keep your GitHub account secure (enable 2FA)
+- Use a private repository for production
+- Rotate GitHub tokens periodically
+- Consider ESP32 flash encryption for high-security deployments
+
+### Automated Releases with GitHub Actions
+
+**Highly Recommended**: Automate the entire release process!
+
+Instead of manually building firmware, GitHub Actions can automatically:
+- Build firmware when you push a version tag
+- Generate checksums
+- Create GitHub releases
+- Upload files
+- Validate versions and firmware size
+
+**Simple workflow**:
+```bash
+# Update version in defines.h, then:
+git tag v0.2.1 && git push origin v0.2.1
+# Everything else happens automatically!
+```
+
+📖 See **[docs/GITHUB_ACTIONS_OTA.md](docs/GITHUB_ACTIONS_OTA.md)** for:
+- Complete production-ready workflow
+- Automated testing and validation
+- Team collaboration features
+- Advanced deployment strategies
 
 ## 📊 Monitoring and Diagnostics
 
@@ -383,32 +711,55 @@ mosquitto_sub -h broker -t "ledSign/YOUR_DEVICE_ID/#" -v
 
 ### Troubleshooting
 
+#### Visual Status Indicators
+
+The system now displays status and errors directly on the sign for immediate user feedback:
+
+- **Clock Display**: Time shows every 60 seconds (4 seconds duration) when system is operational
+- **System Health**: "System OK [MQTT OK] {IP}" displays every 5 minutes when healthy
+- **MQTT Errors**: "MQTT: {status}" displays after 90 seconds of connection failure
+- **NTP Errors**: "NTP Sync Failed" displays immediately when time sync fails
+- **Offline Mode**: Non-blocking sequence shows WiFi credentials when disconnected
+
 #### Common Issues
 
 **Problem**: Device not connecting to WiFi
 ```
-Solution: 
-1. Check WiFi credentials in portal
-2. Verify 2.4GHz network (ESP32 doesn't support 5GHz)
-3. Check signal strength and interference
+Solution:
+1. Watch sign display - it will show "Connect to: LEDSign" with password
+2. Check WiFi credentials in portal (192.168.50.1)
+3. Verify 2.4GHz network (ESP32 doesn't support 5GHz)
+4. Check signal strength and interference
 ```
 
 **Problem**: MQTT messages not received
 ```
 Solution:
-1. Verify MQTT broker accessibility
-2. Check topic names and device ID
-3. Validate MQTT credentials
-4. Monitor broker logs for connection attempts
+1. Watch for error display on sign after 90 seconds
+2. Check sign display for specific error: "MQTT: Bad Credentials", "MQTT: Connection Timeout", etc.
+3. Verify MQTT broker accessibility and port (42690 for TLS)
+4. Check topic names match your zone configuration
+5. Monitor broker logs for connection attempts
+6. Verify certificates are installed (pio run -t uploadfs)
 ```
 
 **Problem**: Sign not displaying messages
 ```
 Solution:
-1. Check serial connection (RX/TX pins)
+1. Check serial connection (RX/TX pins: GPIO 16/17)
 2. Verify baud rate (115200)
-3. Test with simple message: "Hello"
-4. Check sign power and protocol compatibility
+3. Watch for clock display every 60 seconds (indicates sign is working)
+4. Test with simple message via MQTT
+5. Check sign power and protocol compatibility
+```
+
+**Problem**: Clock not displaying
+```
+Solution:
+1. Verify NTP synchronization (watch for "NTP Sync Failed" error on sign)
+2. Check internet connectivity and firewall rules (pool.ntp.org access)
+3. Monitor serial output for NTP sync status
+4. Clock displays every 60 seconds unless priority message is active
 ```
 
 #### Debug Commands
@@ -425,31 +776,41 @@ mosquitto_pub -h broker -t "ledSign/DEVICE_ID/message" -m "[green,flash]TEST"
 
 ## 📋 API Reference
 
-### MessageParser Class
+### handleMQTTMessage Function
 
-#### Methods
+Main message processing function - parses JSON alerts and displays them.
+
 ```cpp
-// Validate message for safety and correctness
-static bool validateMessage(const char* msg);
-
-// Check if message is a system command (# or ^)
-static bool isSystemCommand(const char* msg);
-
-// Check if message is a priority message (*)
-static bool isPriorityMessage(const char* msg);
-
-// Parse message and extract display parameters
-static bool parseMessage(const char* msg, char* color, char* position, 
-                        char* mode, char* special, String* messageContent);
+/**
+ * @brief Process incoming MQTT alert messages
+ * @param topic MQTT topic (e.g., "ledSign/kitchen/message")
+ * @param payload JSON message payload
+ * @param length Payload length in bytes
+ *
+ * Supports:
+ * - Full display_config for custom formatting
+ * - Intelligent presets based on level/category
+ * - Priority interrupts for critical alerts
+ */
+void handleMQTTMessage(char* topic, uint8_t* payload, unsigned int length);
 ```
 
 ### MQTTManager Class
 
+Manages secure MQTT connection with TLS support and zone-based routing.
+
+#### Constructor
+```cpp
+// Create MQTT manager with zone routing
+MQTTManager(WiFiClient* wifi_client, const String& device_id, const String& zone_name = "default");
+```
+
 #### Methods
 ```cpp
-// Configure MQTT connection parameters
-bool configure(const char* server, uint16_t port = 1883, 
-               const char* username = "", const char* password = "");
+// Configure MQTT connection with optional TLS
+bool configure(const char* server, uint16_t port = 42690,
+               const char* username = "", const char* password = "",
+               bool use_tls = true);
 
 // Set message callback function
 void setMessageCallback(std::function<void(char*, uint8_t*, unsigned int)> callback);
@@ -465,20 +826,29 @@ void publishTelemetry();
 
 // Main loop function - call regularly to maintain connection
 void loop();
+
+// Get current zone name
+String getZoneName() const;
 ```
 
 ### SignController Class
+
+Controls BetaBrite LED sign with full protocol support.
 
 #### Methods
 ```cpp
 // Initialize the LED sign with default settings
 bool begin();
 
-// Display a message with specified parameters
-bool displayMessage(const char* message, char color, char position, char mode, char special);
+// Display a message with full protocol control (v0.2.0)
+bool displayMessage(const char* message, char color, char position, char mode, char special,
+                   char charset = '3', const char* speed = "\027");
 
-// Display a priority message that interrupts normal operation
-bool displayPriorityMessage(const char* message);
+// Display a priority message with configurable duration (v0.2.0)
+bool displayPriorityMessage(const char* message, unsigned int duration = 30);
+
+// Check priority message timeout (non-blocking, v0.2.0)
+void checkPriorityTimeout();
 
 // Clear all text files on the sign
 void clearAllFiles();
@@ -491,7 +861,16 @@ bool handleSystemCommand(char command);
 
 // Check if currently displaying a priority message
 bool isInPriorityMode() const;
+
+// Cancel priority message and return to normal operation
+void cancelPriorityMessage();
 ```
+
+### MessageParser Class ⚠️ DEPRECATED
+
+> **Note**: MessageParser is deprecated as of v0.2.0. The system now uses JSON-only format with ArduinoJson for parsing. This class is retained for reference only.
+
+Previous bracket notation format `[color,mode]message` is no longer supported. Use JSON format instead.
 
 ## 📄 License
 
