@@ -120,3 +120,35 @@ button:
     on_press:
       - betabrite.clear:
           id: led_sign
+
+  # SYNC TIME BUTTON
+  - platform: template
+    name: "Sync Time"
+    icon: "mdi:clock-sync"
+    on_press:
+      - betabrite.set_time:
+          id: led_sign
+          hour: !lambda 'return id(ha_time).now().hour;'
+          minute: !lambda 'return id(ha_time).now().minute;'
+          month: !lambda 'return id(ha_time).now().month;'
+          day: !lambda 'return id(ha_time).now().day_of_month;'
+          year: !lambda 'return id(ha_time).now().year;'
+          day_of_week: !lambda 'return id(ha_time).now().day_of_week;'
+
+# -----------------------------------------------------------------------------
+# Time Sync from Home Assistant
+# -----------------------------------------------------------------------------
+time:
+  - platform: homeassistant
+    id: ha_time
+    timezone: America/Denver
+    on_time_sync:
+      # Automatically sync sign clock when HA time updates
+      - betabrite.set_time:
+          id: led_sign
+          hour: !lambda 'return id(ha_time).now().hour;'
+          minute: !lambda 'return id(ha_time).now().minute;'
+          month: !lambda 'return id(ha_time).now().month;'
+          day: !lambda 'return id(ha_time).now().day_of_month;'
+          year: !lambda 'return id(ha_time).now().year;'
+          day_of_week: !lambda 'return id(ha_time).now().day_of_week;'

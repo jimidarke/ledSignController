@@ -394,3 +394,60 @@ async def betabrite_clock_action_to_code(config, action_id, template_arg, args):
     parent = await cg.get_variable(config[CONF_ID])
     var = cg.new_Pvariable(action_id, template_arg, parent)
     return var
+
+
+# Action: betabrite.set_time
+SetTimeAction = betabrite_ns.class_("SetTimeAction", automation.Action)
+
+CONF_HOUR = "hour"
+CONF_MINUTE = "minute"
+CONF_MONTH = "month"
+CONF_DAY = "day"
+CONF_YEAR = "year"
+CONF_DAY_OF_WEEK = "day_of_week"
+CONF_USE_24H = "use_24h"
+
+SET_TIME_ACTION_SCHEMA = cv.Schema({
+    cv.GenerateID(): cv.use_id(BetaBriteComponent),
+    cv.Optional(CONF_HOUR): cv.templatable(cv.int_range(min=0, max=23)),
+    cv.Optional(CONF_MINUTE): cv.templatable(cv.int_range(min=0, max=59)),
+    cv.Optional(CONF_MONTH): cv.templatable(cv.int_range(min=1, max=12)),
+    cv.Optional(CONF_DAY): cv.templatable(cv.int_range(min=1, max=31)),
+    cv.Optional(CONF_YEAR): cv.templatable(cv.int_range(min=2000, max=2099)),
+    cv.Optional(CONF_DAY_OF_WEEK): cv.templatable(cv.int_range(min=0, max=6)),
+    cv.Optional(CONF_USE_24H, default=False): cv.templatable(cv.boolean),
+})
+
+
+@automation.register_action(
+    "betabrite.set_time",
+    SetTimeAction,
+    SET_TIME_ACTION_SCHEMA,
+)
+async def betabrite_set_time_action_to_code(config, action_id, template_arg, args):
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent)
+
+    if CONF_HOUR in config:
+        template_ = await cg.templatable(config[CONF_HOUR], args, cg.uint8)
+        cg.add(var.set_hour(template_))
+    if CONF_MINUTE in config:
+        template_ = await cg.templatable(config[CONF_MINUTE], args, cg.uint8)
+        cg.add(var.set_minute(template_))
+    if CONF_MONTH in config:
+        template_ = await cg.templatable(config[CONF_MONTH], args, cg.uint8)
+        cg.add(var.set_month(template_))
+    if CONF_DAY in config:
+        template_ = await cg.templatable(config[CONF_DAY], args, cg.uint8)
+        cg.add(var.set_day(template_))
+    if CONF_YEAR in config:
+        template_ = await cg.templatable(config[CONF_YEAR], args, cg.uint16)
+        cg.add(var.set_year(template_))
+    if CONF_DAY_OF_WEEK in config:
+        template_ = await cg.templatable(config[CONF_DAY_OF_WEEK], args, cg.uint8)
+        cg.add(var.set_day_of_week(template_))
+    if CONF_USE_24H in config:
+        template_ = await cg.templatable(config[CONF_USE_24H], args, cg.bool_)
+        cg.add(var.set_use_24h(template_))
+
+    return var

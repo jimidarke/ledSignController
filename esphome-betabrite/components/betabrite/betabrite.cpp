@@ -18,20 +18,18 @@ void BetaBriteComponent::setup() {
   ESP_LOGCONFIG(TAG, "Setting up BetaBrite...");
 
   // Configure memory on the sign
-  ESP_LOGD(TAG, "Configuring sign memory...");
-  this->set_memory_configuration_('A', this->max_files_, 256);
+  // File A = Clock, File B = Messages
+  ESP_LOGD(TAG, "Configuring sign memory (A=clock, B=message)...");
+  this->set_memory_configuration_('A', 2, 256);  // Only 2 files: A and B
 
   // Small delay for sign to process
   delay(500);
 
-  // Display initialization message
-  ESP_LOGD(TAG, "Sending init message to sign...");
-  this->write_text_file_('A', "ESPHome Ready", COL_GREEN, DP_TOPLINE,
-                         DM_HOLD, SDM_WELCOME, true, CS_7HIGH, 3);
-
   this->initialized_ = true;
-  this->current_file_ = 'A';
-  this->message_count_ = 1;
+  this->message_count_ = 0;
+
+  // Display clock on file A
+  this->display_clock();
 
   ESP_LOGCONFIG(TAG, "BetaBrite initialized successfully");
 }
@@ -137,15 +135,15 @@ void BetaBriteComponent::display_message_full(const std::string &message,
   // Cancel offline mode when displaying manual message
   this->in_offline_mode_ = false;
 
-  ESP_LOGD(TAG, "Displaying message: %s", message.c_str());
+  ESP_LOGD(TAG, "Displaying message on file B: %s", message.c_str());
 
   // Use special mode if effect is requested
   DisplayMode actual_mode = use_effect ? DM_SPECIAL : mode;
 
-  this->write_text_file_(this->current_file_, message, color, position,
+  // Messages always go to file B (file A is reserved for clock)
+  this->write_text_file_('B', message, color, position,
                          actual_mode, effect, use_effect, charset, speed);
 
-  this->advance_to_next_file_();
   this->message_count_++;
 }
 
@@ -185,13 +183,14 @@ void BetaBriteComponent::display_clock() {
     return;
   }
 
-  ESP_LOGD(TAG, "Displaying clock");
+  ESP_LOGD(TAG, "Displaying clock on file A");
 
   // Build clock display string with call-time format code
   std::string clock_str;
   clock_str += FC_CALLTIME;  // This tells the sign to display its internal time
 
-  this->write_text_file_(this->current_file_, clock_str, this->clock_color_,
+  // Clock always goes to file A
+  this->write_text_file_('A', clock_str, this->clock_color_,
                          DP_TOPLINE, DM_HOLD, SDM_TWINKLE, false, CS_7HIGH, 3);
 }
 
@@ -201,15 +200,22 @@ void BetaBriteComponent::clear_display() {
   // Cancel any priority message
   this->cancel_priority_message();
 
-  // Reset memory configuration to clear all files
-  this->set_memory_configuration_('A', this->max_files_, 256);
+  // Reset memory configuration (2 files: A=clock, B=message)
+  this->set_memory_configuration_('A', 2, 256);
 
-  this->current_file_ = 'A';
   this->message_count_ = 0;
+
+  // Show clock after clearing
+  delay(200);
+  this->display_clock();
 }
 
 void BetaBriteComponent::run_demo() {
   ESP_LOGD(TAG, "Running demo sequence");
+
+  // Disable clock display during demo
+  bool clock_was_enabled = this->clock_enabled_;
+  this->clock_enabled_ = false;
 
   // Demo sequence showing various colors and effects
   const char *demo_colors[] = {"red", "green", "amber", "orange", "yellow"};
@@ -219,8 +225,63 @@ void BetaBriteComponent::run_demo() {
   for (int i = 0; i < 5; i++) {
     std::string msg = "Demo Mode " + std::to_string(i + 1);
     this->display_message(msg, demo_colors[i], demo_modes[i], demo_effects[i]);
-    delay(3000);
+    delay(4000);
   }
+
+  // Re-enable clock and show it
+  this->clock_enabled_ = clock_was_enabled;
+  this->display_clock();
+  ESP_LOGD(TAG, "Demo complete");
+}
+
+void BetaBriteComponent::set_time(uint8_t hour, uint8_t minute, uint8_t month,
+                                   uint8_t day, uint16_t year, uint8_t day_of_week,
+                                   bool use_24h) {
+  ESP_LOGD(TAG, "Setting time: %02d:%02d %02d/%02d/%04d (dow=%d, 24h=%s)",
+           hour, minute, month, day, year, day_of_week, use_24h ? "yes" : "no");
+
+  char buf[8];
+
+  this->begin_command_();
+
+  // Set time (HHMM)
+  this->begin_nested_command_();
+  this->delay_between_commands_();
+  this->write_byte(CC_WSPFUNC);
+  this->write_byte(' ');  // Set Time command
+  snprintf(buf, sizeof(buf), "%02d%02d", hour, minute);
+  this->write_str(buf);
+  this->end_nested_command_();
+
+  // Set time format (M=24h military, S=12h standard)
+  this->begin_nested_command_();
+  this->delay_between_commands_();
+  this->write_byte(CC_WSPFUNC);
+  this->write_byte('\'');  // Time format command (0x27)
+  this->write_byte(use_24h ? 'M' : 'S');
+  this->end_nested_command_();
+
+  // Set day of week (1=Sunday through 7=Saturday)
+  this->begin_nested_command_();
+  this->delay_between_commands_();
+  this->write_byte(CC_WSPFUNC);
+  this->write_byte('&');  // Day of week command
+  this->write_byte('1' + (day_of_week % 7));
+  this->end_nested_command_();
+
+  // Set date (MMDDYY)
+  this->begin_nested_command_();
+  this->delay_between_commands_();
+  this->write_byte(CC_WSPFUNC);
+  this->write_byte(';');  // Set Date command
+  uint8_t yy = (year >= 2000) ? (year - 2000) : 0;
+  snprintf(buf, sizeof(buf), "%02d%02d%02d", month, day, yy);
+  this->write_str(buf);
+  this->end_nested_command_();
+
+  this->end_command_();
+
+  ESP_LOGD(TAG, "Time set complete");
 }
 
 // ============================================================================
@@ -444,7 +505,8 @@ void BetaBriteComponent::advance_offline_message_() {
 
   DisplayMode mode = msg.use_effect ? DM_SPECIAL : msg.mode;
 
-  this->write_text_file_(this->current_file_, msg.text, msg.color, msg.position,
+  // Offline messages go to file B (same as regular messages)
+  this->write_text_file_('B', msg.text, msg.color, msg.position,
                          mode, msg.effect, msg.use_effect, msg.charset, msg.speed);
 }
 

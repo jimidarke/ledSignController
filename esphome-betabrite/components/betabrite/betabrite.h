@@ -99,6 +99,7 @@ class BetaBriteComponent : public Component, public uart::UARTDevice {
   void display_clock();
   void clear_display();
   void run_demo();
+  void set_time(uint8_t hour, uint8_t minute, uint8_t month, uint8_t day, uint16_t year, uint8_t day_of_week, bool use_24h = false);
 
   // State queries
   bool is_in_priority_mode() const { return this->in_priority_mode_; }
