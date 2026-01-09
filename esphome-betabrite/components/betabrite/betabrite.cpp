@@ -18,12 +18,14 @@ void BetaBriteComponent::setup() {
   ESP_LOGCONFIG(TAG, "Setting up BetaBrite...");
 
   // Configure memory on the sign
+  ESP_LOGD(TAG, "Configuring sign memory...");
   this->set_memory_configuration_('A', this->max_files_, 256);
 
   // Small delay for sign to process
-  delay(200);
+  delay(500);
 
   // Display initialization message
+  ESP_LOGD(TAG, "Sending init message to sign...");
   this->write_text_file_('A', "ESPHome Ready", COL_GREEN, DP_TOPLINE,
                          DM_HOLD, SDM_WELCOME, true, CS_7HIGH, 3);
 
@@ -292,7 +294,7 @@ void BetaBriteComponent::write_text_file_(char name, const std::string &contents
   // Write the actual content
   this->write_str(contents.c_str());
 
-  this->end_nested_command_();
+  // Note: Do NOT send ETX for text files - just EOT
   this->end_command_();
 }
 
@@ -311,7 +313,6 @@ void BetaBriteComponent::cancel_priority_text_file_() {
   this->begin_nested_command_();
   this->write_byte(CC_WTEXT);
   this->write_byte(PRIORITY_FILE_LABEL);
-  this->end_nested_command_();
   this->end_command_();
 }
 
@@ -321,7 +322,6 @@ void BetaBriteComponent::write_string_file_(char name, const std::string &conten
   this->write_byte(CC_WSTRING);
   this->write_byte(name);
   this->write_str(contents.c_str());
-  this->end_nested_command_();
   this->end_command_();
 }
 
@@ -334,9 +334,9 @@ void BetaBriteComponent::set_memory_configuration_(char start_file, uint8_t num_
   this->write_byte(CC_WSPFUNC);
   this->write_byte(SFL_CLEARMEM);
 
-  // Format size as 4-digit hex
+  // Format size as 4-digit hex (lowercase to match protocol)
   char size_buf[5];
-  snprintf(size_buf, sizeof(size_buf), "%04X", size);
+  snprintf(size_buf, sizeof(size_buf), "%04x", size);
 
   // Configure each file
   for (char c = start_file; c < start_file + num_files && c <= 'Z'; c++) {
@@ -347,7 +347,6 @@ void BetaBriteComponent::set_memory_configuration_(char start_file, uint8_t num_
     this->write_str("FF00");  // AlwaysOn for text file
   }
 
-  this->end_nested_command_();
   this->end_command_();
 
   // Give the sign time to reconfigure memory

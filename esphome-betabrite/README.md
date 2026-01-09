@@ -77,12 +77,46 @@ external_components:
     components: [betabrite]
 ```
 
-## Quick Start
+## Quick Start - Complete Working Example
+
+Copy this entire config to get a working LED sign with Home Assistant text input:
 
 ```yaml
-# Minimal configuration
+substitutions:
+  name: "led-sign"
+  friendly_name: "LED Sign"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+
+logger:
+api:
+  encryption:
+    key: !secret api_encryption_key
+ota:
+  - platform: esphome
+    password: !secret ota_password
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${name}-fallback"
+captive_portal:
+
+# === BetaBrite Component ===
+external_components:
+  - source:
+      type: git
+      url: https://github.com/jimidarke/ledSignController
+      ref: main
+      path: esphome-betabrite/components
+    components: [betabrite]
+
 uart:
-  id: sign_uart
   tx_pin: GPIO17
   rx_pin: GPIO16
   baud_rate: 9600
@@ -92,8 +126,46 @@ uart:
 
 betabrite:
   id: led_sign
-  uart_id: sign_uart
+
+# === Home Assistant Controls ===
+# Text input - type a message in HA, it displays on the sign!
+text:
+  - platform: template
+    name: "Message"
+    icon: "mdi:message-text"
+    optimistic: true
+    max_length: 125
+    on_value:
+      - if:
+          condition:
+            lambda: 'return x.length() > 0;'
+          then:
+            - betabrite.display:
+                id: led_sign
+                text: !lambda 'return x;'
+                color: !lambda 'return id(color_select).state;'
+
+# Color picker dropdown
+select:
+  - platform: template
+    name: "Color"
+    id: color_select
+    icon: "mdi:palette"
+    optimistic: true
+    options: ["green", "red", "amber", "orange", "yellow"]
+    initial_option: "green"
+
+# Clear button
+button:
+  - platform: template
+    name: "Clear"
+    icon: "mdi:eraser"
+    on_press:
+      - betabrite.clear:
+          id: led_sign
 ```
+
+**In Home Assistant:** Find your device, open the "Message" entity, type text, and watch it appear on your sign!
 
 ## Full Configuration
 
