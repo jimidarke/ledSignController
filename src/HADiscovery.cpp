@@ -17,11 +17,13 @@
 HADiscovery::HADiscovery(PubSubClient* mqtt_client,
                          const String& device_id,
                          const String& device_name,
-                         const String& zone_name)
+                         const String& zone_name,
+                         const String& topic_prefix)
     : mqtt_client(mqtt_client),
       device_id(device_id),
       device_name(device_name),
-      zone_name(zone_name) {
+      zone_name(zone_name),
+      topic_prefix(topic_prefix) {
 
     // Create unique ID prefix for all entities
     unique_id_prefix = "ledsign_" + device_id;
@@ -29,6 +31,8 @@ HADiscovery::HADiscovery(PubSubClient* mqtt_client,
     Serial.println("HADiscovery: Initialized");
     Serial.print("HADiscovery: Device ID: ");
     Serial.println(device_id);
+    Serial.print("HADiscovery: Topic prefix: ");
+    Serial.println(topic_prefix.length() > 0 ? topic_prefix : "(none)");
     Serial.print("HADiscovery: Unique ID prefix: ");
     Serial.println(unique_id_prefix);
 }
@@ -61,15 +65,15 @@ String HADiscovery::getDiscoveryTopic(const char* component, const char* object_
 }
 
 String HADiscovery::getStateTopic(const char* entity) const {
-    return "ledSign/" + device_id + "/" + entity;
+    return topic_prefix + "ledSign/" + device_id + "/" + entity;
 }
 
 String HADiscovery::getCommandTopic(const char* entity) const {
-    return "ledSign/" + device_id + "/" + entity + "/set";
+    return topic_prefix + "ledSign/" + device_id + "/" + entity + "/set";
 }
 
 String HADiscovery::getAvailabilityTopic() const {
-    return "ledSign/" + device_id + "/status";
+    return topic_prefix + "ledSign/" + device_id + "/status";
 }
 
 String HADiscovery::getLWTTopic() const {

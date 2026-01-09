@@ -81,11 +81,13 @@ public:
      * @param device_id Unique device identifier (MAC-based)
      * @param device_name Human-readable device name
      * @param zone_name Zone for topic routing
+     * @param topic_prefix Prefix for state/command topics (e.g., "ha/" for secondary broker)
      */
     HADiscovery(PubSubClient* mqtt_client,
                 const String& device_id,
                 const String& device_name = "LED Sign",
-                const String& zone_name = "default");
+                const String& zone_name = "default",
+                const String& topic_prefix = "");
 
     /**
      * @brief Set callback for manual message commands
@@ -175,6 +177,7 @@ private:
     String device_id;
     String device_name;
     String zone_name;
+    String topic_prefix;      // Prefix for state/command topics (e.g., "ha/")
     String unique_id_prefix;
 
     // Callbacks

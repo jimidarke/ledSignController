@@ -35,6 +35,7 @@
 #include "SignController.h"
 #include "GitHubOTA.h"
 #include "HADiscovery.h"
+#include "HAMQTTClient.h"
 
 // Third-party libraries
 #include <ArduinoJson.h>
@@ -80,12 +81,19 @@ SignController* sign_controller = nullptr;       ///< LED sign control interface
 GitHubOTA* ota_manager = nullptr;                ///< GitHub-based OTA update manager
 HADiscovery* ha_discovery = nullptr;             ///< Home Assistant MQTT Discovery
 
+HAMQTTClient* ha_mqtt_client = nullptr;          ///< Secondary MQTT for Home Assistant
+
 // WiFiManager custom parameters (linked to dynamicParams.h variables)
+// Primary MQTT (Cloud/Alert Manager)
 WiFiManagerParameter custom_mqtt_server("server", "MQTT Server", MQTT_Server, MAX_MQTT_SERVER_LEN);
 WiFiManagerParameter custom_mqtt_port("port", "MQTT Port", MQTT_Port, MAX_MQTT_PORT_LEN);
 WiFiManagerParameter custom_mqtt_user("user", "MQTT User (optional)", MQTT_User, MAX_MQTT_USER_LEN);
 WiFiManagerParameter custom_mqtt_pass("pass", "MQTT Pass (optional)", MQTT_Pass, MAX_MQTT_PASS_LEN);
 WiFiManagerParameter custom_zone_name("zone", "Sign Zone", Zone_Name, MAX_ZONE_NAME_LEN);
+
+// Secondary MQTT (Home Assistant - local LAN)
+WiFiManagerParameter custom_ha_mqtt_server("ha_server", "HA MQTT Server (empty=disabled)", HA_MQTT_Server, MAX_HA_MQTT_SERVER_LEN);
+WiFiManagerParameter custom_ha_mqtt_port("ha_port", "HA MQTT Port", HA_MQTT_Port, MAX_HA_MQTT_PORT_LEN);
 
 /**
  * @brief Application state variables
@@ -240,18 +248,23 @@ void loop() {
         
         // Run network services if initialized
         if (services_initialized) {
-            // Handle MQTT communication
+            // Handle primary MQTT communication (Alert Manager)
             if (mqtt_manager) {
                 mqtt_manager->loop();
+            }
 
-                // Home Assistant Discovery - publish when MQTT connects
+            // Handle secondary MQTT communication (Home Assistant)
+            if (ha_mqtt_client) {
+                ha_mqtt_client->loop();
+
+                // Home Assistant Discovery - publish when HA MQTT connects
                 static bool ha_discovery_published = false;
                 static unsigned long last_ha_sensor_update = 0;
 
-                if (mqtt_manager->isConnected()) {
+                if (ha_mqtt_client->isConnected()) {
                     // Publish discovery on first connection
                     if (!ha_discovery_published && ha_discovery) {
-                        Serial.println("MQTT connected - publishing HA Discovery...");
+                        Serial.println("HA MQTT connected - publishing HA Discovery...");
 
                         // Update availability to online
                         ha_discovery->updateAvailability(true);
@@ -358,12 +371,16 @@ void initializeDevice() {
     // Initialize WiFi manager (tzapu/WiFiManager)
     Serial.println("Initializing WiFi manager...");
 
-    // Add custom parameters
+    // Add custom parameters - Primary MQTT (Cloud/Alert Manager)
     wifiManager.addParameter(&custom_mqtt_server);
     wifiManager.addParameter(&custom_mqtt_port);
     wifiManager.addParameter(&custom_mqtt_user);
     wifiManager.addParameter(&custom_mqtt_pass);
     wifiManager.addParameter(&custom_zone_name);
+
+    // Add custom parameters - Secondary MQTT (Home Assistant)
+    wifiManager.addParameter(&custom_ha_mqtt_server);
+    wifiManager.addParameter(&custom_ha_mqtt_port);
 
     // Configure WiFi manager
     wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
@@ -383,11 +400,16 @@ void initializeDevice() {
     }
 
     // Copy parameter values after portal (user may have updated them)
+    // Primary MQTT
     strcpy(MQTT_Server, custom_mqtt_server.getValue());
     strcpy(MQTT_Port, custom_mqtt_port.getValue());
     strcpy(MQTT_User, custom_mqtt_user.getValue());
     strcpy(MQTT_Pass, custom_mqtt_pass.getValue());
     strcpy(Zone_Name, custom_zone_name.getValue());
+
+    // Secondary MQTT (Home Assistant)
+    strcpy(HA_MQTT_Server, custom_ha_mqtt_server.getValue());
+    strcpy(HA_MQTT_Port, custom_ha_mqtt_port.getValue());
 
     Serial.println("WiFi connected successfully!");
     Serial.print("IP Address: ");
@@ -476,54 +498,6 @@ void initializeNetworkServices() {
 
                     if (mqtt_manager->begin()) {
                         Serial.println("MQTT manager initialized successfully");
-
-                        // Initialize Home Assistant Discovery
-                        Serial.println("Initializing Home Assistant Discovery...");
-                        ha_discovery = new HADiscovery(
-                            mqtt_manager->getClient(),
-                            device_id,
-                            "LED Sign",
-                            Zone_Name
-                        );
-
-                        if (ha_discovery) {
-                            // Set up callbacks for HA commands
-                            ha_discovery->setMessageCallback([](const String& message) {
-                                Serial.print("HA: Display message: ");
-                                Serial.println(message);
-                                if (sign_controller) {
-                                    // Use priority message for HA commands (30 second display)
-                                    sign_controller->displayPriorityMessage(message.c_str(), 30);
-                                }
-                            });
-
-                            ha_discovery->setEffectCallback([](const String& effect) {
-                                Serial.print("HA: Effect changed to: ");
-                                Serial.println(effect);
-                                // Effect will be applied on next message
-                            });
-
-                            ha_discovery->setColorCallback([](const String& color) {
-                                Serial.print("HA: Color changed to: ");
-                                Serial.println(color);
-                                // Color will be applied on next message
-                            });
-
-                            ha_discovery->setClearCallback([]() {
-                                Serial.println("HA: Clear display requested");
-                                if (sign_controller) {
-                                    sign_controller->clearAllFiles();
-                                }
-                            });
-
-                            ha_discovery->setRebootCallback([]() {
-                                Serial.println("HA: Reboot requested");
-                                delay(1000);
-                                ESP.restart();
-                            });
-
-                            Serial.println("Home Assistant Discovery initialized");
-                        }
                     } else {
                         Serial.println("Warning: MQTT manager initialization failed");
                     }
@@ -586,6 +560,85 @@ void initializeNetworkServices() {
             Serial.println("OTA: Manager initialized successfully");
         } else {
             Serial.println("OTA: Warning - Failed to create OTA manager");
+        }
+
+        // Initialize Home Assistant MQTT (secondary broker) if configured
+        if (strlen(HA_MQTT_Server) > 0) {
+            Serial.println("Initializing Home Assistant MQTT (secondary broker)...");
+            Serial.print("HA MQTT Server: ");
+            Serial.println(HA_MQTT_Server);
+
+            ha_mqtt_client = new HAMQTTClient(device_id);
+            uint16_t ha_port = atoi(HA_MQTT_Port);
+
+            if (ha_mqtt_client->configure(HA_MQTT_Server, ha_port)) {
+                // Set callback to route HA commands
+                ha_mqtt_client->setMessageCallback([](char* topic, uint8_t* payload, unsigned int length) {
+                    // Route to HADiscovery handler
+                    if (ha_discovery) {
+                        ha_discovery->handleMessage(topic, payload, length);
+                    }
+                });
+
+                if (ha_mqtt_client->begin()) {
+                    Serial.println("HA MQTT: Secondary broker client initialized");
+
+                    // Initialize HADiscovery with secondary broker client
+                    ha_discovery = new HADiscovery(
+                        ha_mqtt_client->getClient(),
+                        device_id,
+                        "LED Sign",
+                        Zone_Name,
+                        HA_TOPIC_PREFIX  // "ha/" prefix for state/command topics
+                    );
+
+                    if (ha_discovery) {
+                        // Set up callbacks for HA commands
+                        ha_discovery->setMessageCallback([](const String& message) {
+                            Serial.print("HA: Display message: ");
+                            Serial.println(message);
+                            if (sign_controller) {
+                                // Use priority message for HA commands (30 second display)
+                                sign_controller->displayPriorityMessage(message.c_str(), 30);
+                            }
+                        });
+
+                        ha_discovery->setEffectCallback([](const String& effect) {
+                            Serial.print("HA: Effect changed to: ");
+                            Serial.println(effect);
+                            // Effect will be applied on next message
+                        });
+
+                        ha_discovery->setColorCallback([](const String& color) {
+                            Serial.print("HA: Color changed to: ");
+                            Serial.println(color);
+                            // Color will be applied on next message
+                        });
+
+                        ha_discovery->setClearCallback([]() {
+                            Serial.println("HA: Clear display requested");
+                            if (sign_controller) {
+                                sign_controller->clearAllFiles();
+                            }
+                        });
+
+                        ha_discovery->setRebootCallback([]() {
+                            Serial.println("HA: Reboot requested");
+                            delay(1000);
+                            ESP.restart();
+                        });
+
+                        Serial.println("Home Assistant Discovery initialized on secondary broker");
+                    }
+                } else {
+                    Serial.println("HA MQTT: Warning - Client initialization failed");
+                }
+            } else {
+                Serial.println("HA MQTT: Warning - Configuration failed");
+            }
+        } else {
+            Serial.println("HA MQTT: Not configured (server empty) - Home Assistant integration disabled");
+            ha_discovery = nullptr;
         }
 
         services_initialized = true;
@@ -720,10 +773,8 @@ void handleMQTTMessage(char* topic, uint8_t* payload, unsigned int length) {
         return;
     }
 
-    // Check if HADiscovery should handle this message (command topics)
-    if (ha_discovery && ha_discovery->handleMessage(topic, payload, length)) {
-        return;  // Message handled by HADiscovery
-    }
+    // Note: HADiscovery is on secondary broker (ha_mqtt_client) with its own callback
+    // This handler is for primary broker (Alert Manager) messages only
 
     // Log received message
     Serial.print("MQTT Message [");

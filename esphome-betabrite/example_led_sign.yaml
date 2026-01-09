@@ -1,0 +1,292 @@
+# ESPHome BetaBrite LED Sign Controller Example
+#
+# This example shows a complete configuration for a BetaBrite LED sign
+# with Home Assistant integration, offline message cycling, and automations.
+#
+# Hardware Setup:
+#   - ESP32 development board
+#   - BetaBrite LED sign connected via RS232/TTL adapter
+#   - TX: GPIO17, RX: GPIO16 (standard UART2 pins)
+
+esphome:
+  name: led-sign
+  friendly_name: "LED Sign"
+  comment: "BetaBrite LED sign controller"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+  level: DEBUG
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret api_encryption_key
+  services:
+    # Custom service to display a message from Home Assistant
+    - service: display_message
+      variables:
+        message: string
+        color: string
+        effect: string
+      then:
+        - betabrite.display:
+            id: led_sign
+            text: !lambda 'return message;'
+            color: !lambda 'return color;'
+            effect: !lambda 'return effect;'
+
+    # Custom service for priority alerts
+    - service: priority_alert
+      variables:
+        message: string
+        duration: int
+      then:
+        - betabrite.priority:
+            id: led_sign
+            text: !lambda 'return message;'
+            duration: !lambda 'return duration;'
+
+# Enable OTA updates (replaces custom GitHub OTA)
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# WiFi configuration
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "LED-Sign-Fallback"
+    password: !secret fallback_password
+
+captive_portal:
+
+# Web server for local control
+web_server:
+  port: 80
+
+# External component - BetaBrite
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [betabrite]
+
+# UART for BetaBrite sign communication
+uart:
+  id: sign_uart
+  tx_pin: GPIO17
+  rx_pin: GPIO16
+  baud_rate: 9600
+  # BetaBrite uses 7E1 (7 data bits, even parity, 1 stop bit)
+  data_bits: 7
+  parity: EVEN
+  stop_bits: 1
+
+# BetaBrite LED Sign Component
+betabrite:
+  id: led_sign
+  uart_id: sign_uart
+  sign_type: betabrite
+  address: "00"
+  max_files: 5
+
+  # Default display settings
+  defaults:
+    color: green
+    mode: rotate
+    charset: 7high
+    position: topline
+    speed: 3
+    effect: twinkle
+
+  # Clock display configuration
+  clock:
+    enabled: true
+    interval: 60s
+    duration: 4s
+    format: 12h
+    color: amber
+
+  # Priority message settings
+  priority:
+    warning_duration: 2500ms
+    default_duration: 25s
+
+  # Offline messages - displayed when WiFi/API disconnected
+  # These cycle automatically to show static business information
+  offline_messages:
+    - text: !secret company_name
+      color: green
+      mode: hold
+      duration: 10s
+      effect: welcome
+
+    - text: !secret company_address
+      color: amber
+      mode: scroll
+      duration: 15s
+
+    - text: !secret company_phone
+      color: green
+      mode: rotate
+      duration: 8s
+      effect: sparkle
+
+    - text: "Open Mon-Fri 9AM-5PM"
+      color: amber
+      mode: hold
+      duration: 10s
+
+# Optional: MQTT for external alert systems
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_user
+  password: !secret mqtt_password
+  discovery: false
+
+  on_message:
+    - topic: "ledSign/kitchen/message"
+      then:
+        - lambda: |-
+            // Parse JSON message from Alert Manager
+            // Expected format: {"title":"...", "message":"...", "level":"...", "category":"..."}
+            std::string payload(reinterpret_cast<const char*>(x.payload.data()), x.payload.size());
+            ESP_LOGD("mqtt", "Received message: %s", payload.c_str());
+            // Simple display - full JSON parsing would require ArduinoJson
+            id(led_sign).display_message(payload);
+
+# Buttons for Home Assistant control
+button:
+  - platform: template
+    name: "Clear Display"
+    icon: mdi:eraser
+    on_press:
+      - betabrite.clear:
+          id: led_sign
+
+  - platform: template
+    name: "Run Demo"
+    icon: mdi:play-circle
+    on_press:
+      - betabrite.demo:
+          id: led_sign
+
+  - platform: restart
+    name: "Restart Device"
+
+# Text input for Home Assistant
+text:
+  - platform: template
+    name: "Display Message"
+    id: ha_message_input
+    optimistic: true
+    min_length: 0
+    max_length: 200
+    mode: text
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: 'return x.length() > 0;'
+            then:
+              - betabrite.display:
+                  id: led_sign
+                  text: !lambda 'return x;'
+
+# Select inputs for display options
+select:
+  - platform: template
+    name: "Display Color"
+    id: display_color
+    optimistic: true
+    options:
+      - "red"
+      - "green"
+      - "amber"
+      - "orange"
+      - "yellow"
+      - "rainbow1"
+    initial_option: "green"
+
+  - platform: template
+    name: "Display Effect"
+    id: display_effect
+    optimistic: true
+    options:
+      - "none"
+      - "twinkle"
+      - "sparkle"
+      - "snow"
+      - "welcome"
+      - "fireworks"
+      - "bomb"
+    initial_option: "twinkle"
+
+  - platform: template
+    name: "Display Mode"
+    id: display_mode
+    optimistic: true
+    options:
+      - "rotate"
+      - "scroll"
+      - "flash"
+      - "hold"
+      - "wipein"
+      - "explode"
+    initial_option: "rotate"
+
+# Sensors for diagnostics
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+
+  - platform: uptime
+    name: "Uptime"
+
+# Binary sensor to show connection status
+binary_sensor:
+  - platform: status
+    name: "Status"
+
+# Time component for clock display
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+    timezone: "America/Denver"
+
+# Example automations
+script:
+  - id: morning_greeting
+    then:
+      - betabrite.display:
+          id: led_sign
+          text: "Good Morning!"
+          color: "green"
+          effect: "welcome"
+      - delay: 10s
+      - betabrite.display:
+          id: led_sign
+          text: !lambda |-
+            auto time = id(homeassistant_time).now();
+            char buf[32];
+            snprintf(buf, sizeof(buf), "Today: %02d/%02d", time.month, time.day_of_month);
+            return std::string(buf);
+          color: "amber"
+
+  - id: alert_sequence
+    parameters:
+      alert_message: string
+    then:
+      - betabrite.priority:
+          id: led_sign
+          text: !lambda 'return alert_message;'
+          duration: 30s

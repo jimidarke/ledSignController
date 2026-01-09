@@ -115,4 +115,16 @@
 #define OTA_VERIFY_CHECKSUM       true
 #define OTA_ALLOW_DOWNGRADE       false
 
+/////////////////////////////////////////////
+/////// HOME ASSISTANT MQTT (SECONDARY) /////
+/////////////////////////////////////////////
+
+// HA MQTT Configuration (local LAN, no TLS, no auth)
+#define HA_MQTT_DEFAULT_PORT      1883    // Plain MQTT for local network
+#define HA_MQTT_RECONNECT_MS      5000    // 5 seconds between reconnect attempts
+#define HA_MQTT_KEEPALIVE         60      // Keepalive interval in seconds
+
+// HA Topic prefix (differentiates from primary broker topics)
+#define HA_TOPIC_PREFIX           "ha/"
+
 #endif // defines_h
