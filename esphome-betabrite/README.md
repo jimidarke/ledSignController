@@ -41,10 +41,13 @@ Add this to your ESPHome configuration:
 
 ```yaml
 external_components:
-  - source: github://jimidarke/ledSignController
+  - source:
+      type: git
+      url: https://github.com/jimidarke/ledSignController
+      ref: main
+      path: esphome-betabrite/components
     components: [betabrite]
     refresh: 1d
-    path: esphome-betabrite/components
 ```
 
 ### Option 2: Local Source

@@ -5,6 +5,9 @@
 
 #include "betabrite.h"
 #include "esphome/core/application.h"
+#ifdef USE_WIFI
+#include <WiFi.h>
+#endif
 
 namespace esphome {
 namespace betabrite {
@@ -454,10 +457,9 @@ void BetaBriteComponent::advance_to_next_file_() {
 }
 
 bool BetaBriteComponent::is_network_connected_() {
-  // Check if ESPHome has active network connectivity
-  // This works with both WiFi and API/MQTT connections
+  // Check if WiFi has active network connectivity
 #ifdef USE_WIFI
-  return App.is_fully_connected();
+  return WiFi.status() == WL_CONNECTED;
 #else
   return true;  // Assume connected if no WiFi
 #endif
