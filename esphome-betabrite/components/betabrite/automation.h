@@ -27,7 +27,7 @@ class DisplayMessageAction : public Action<Ts...> {
   TEMPLATABLE_VALUE(std::string, mode)
   TEMPLATABLE_VALUE(std::string, effect)
 
-  void play(Ts... x) override {
+  void play(const Ts &...x) override {
     std::string msg = this->message_.value(x...);
     std::string col = this->color_.has_value() ? this->color_.value(x...) : "";
     std::string mod = this->mode_.has_value() ? this->mode_.value(x...) : "";
@@ -52,7 +52,7 @@ class ClearAction : public Action<Ts...> {
  public:
   explicit ClearAction(BetaBriteComponent *parent) : parent_(parent) {}
 
-  void play(Ts... x) override {
+  void play(const Ts &...x) override {
     this->parent_->clear_display();
   }
 
@@ -71,7 +71,7 @@ class PriorityMessageAction : public Action<Ts...> {
   TEMPLATABLE_VALUE(std::string, message)
   TEMPLATABLE_VALUE(uint32_t, duration)
 
-  void play(Ts... x) override {
+  void play(const Ts &...x) override {
     std::string msg = this->message_.value(x...);
     uint32_t dur = this->duration_.has_value() ? this->duration_.value(x...) : 0;
     this->parent_->display_priority_message(msg, dur);
@@ -89,7 +89,7 @@ class DemoAction : public Action<Ts...> {
  public:
   explicit DemoAction(BetaBriteComponent *parent) : parent_(parent) {}
 
-  void play(Ts... x) override {
+  void play(const Ts &...x) override {
     this->parent_->run_demo();
   }
 
@@ -105,7 +105,7 @@ class CancelPriorityAction : public Action<Ts...> {
  public:
   explicit CancelPriorityAction(BetaBriteComponent *parent) : parent_(parent) {}
 
-  void play(Ts... x) override {
+  void play(const Ts &...x) override {
     this->parent_->cancel_priority_message();
   }
 
@@ -121,7 +121,7 @@ class DisplayClockAction : public Action<Ts...> {
  public:
   explicit DisplayClockAction(BetaBriteComponent *parent) : parent_(parent) {}
 
-  void play(Ts... x) override {
+  void play(const Ts &...x) override {
     this->parent_->display_clock();
   }
 
