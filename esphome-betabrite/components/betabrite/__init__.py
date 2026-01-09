@@ -29,7 +29,7 @@ from esphome.const import (
     CONF_TRIGGER_ID,
 )
 
-DEPENDENCIES = ["uart"]
+DEPENDENCIES = ["uart", "wifi"]
 AUTO_LOAD = []
 MULTI_CONF = False
 
