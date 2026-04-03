@@ -39,8 +39,12 @@ bool SignController::begin() {
     Serial.println("SignController: Initializing LED sign via TTL-RS232 connection");
     Serial.print("SignController: Device ID: ");
     Serial.println(device_id);
-    
-    // Configure sign memory
+
+    // Clear any stale content on the sign from previous boot
+    sign->CancelPriorityTextFile();
+    delay(200);
+
+    // Configure sign memory (clears all files and reallocates)
     if (!configureMemory()) {
         Serial.println("SignController: Warning - Memory configuration failed");
     }
@@ -172,7 +176,7 @@ bool SignController::displayPriorityMessage(const char* message, unsigned int du
     Serial.println("SignController: Displaying priority warning (non-blocking)");
     sign->CancelPriorityTextFile();
     sign->WritePriorityTextFile(
-        "# # # #",
+        "ALERT",
         BB_COL_RED,
         BB_DP_TOPLINE,
         BB_DM_FLASH,
@@ -369,9 +373,22 @@ void SignController::displayError(const char* error_message, unsigned int durati
     Serial.print("SignController: Displaying error message: ");
     Serial.println(error_message);
 
-    // Display error as a priority message (non-blocking)
-    // Use red color, flash mode for high visibility
-    displayPriorityMessage(error_message, duration_seconds);
+    // Show error directly on the sign (red, flash) without the "# # # #" warning stage
+    in_priority_mode = true;
+    priority_stage = PRIORITY_MESSAGE;
+    priority_start_time = millis();
+    priority_end_time = priority_start_time + (duration_seconds * 1000UL);
+    priority_duration = duration_seconds;
+    priority_message_content = String(error_message);
+
+    sign->CancelPriorityTextFile();
+    sign->WritePriorityTextFile(
+        error_message,
+        BB_COL_RED,
+        BB_DP_TOPLINE,
+        BB_DM_FLASH,
+        BB_SDM_TWINKLE
+    );
 }
 
 void SignController::checkOfflineTimeout() {
