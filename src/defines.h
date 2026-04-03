@@ -113,7 +113,7 @@
 /////////////////////////////////////////////
 
 // Current firmware version (semantic versioning)
-#define FIRMWARE_VERSION          "0.4.0"
+#define FIRMWARE_VERSION          "0.5.0"
 
 // GitHub Repository Configuration
 // TODO: Update these with your actual GitHub username and repository name
