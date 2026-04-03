@@ -40,11 +40,13 @@ bool SignController::begin() {
     Serial.print("SignController: Device ID: ");
     Serial.println(device_id);
 
-    // Clear any stale content on the sign from previous boot
+    // Blank the sign immediately (matches racing_countdown.py clear_display)
+    Serial.println("SignController: Blanking sign");
+    sign->WriteTextFile('A', " ", BB_COL_AUTOCOLOR, BB_DP_TOPLINE, BB_DM_HOLD, BB_SDM_TWINKLE);
     sign->CancelPriorityTextFile();
-    delay(200);
+    delay(500);
 
-    // Configure sign memory (clears all files and reallocates)
+    // Configure sign memory (reallocates file slots)
     if (!configureMemory()) {
         Serial.println("SignController: Warning - Memory configuration failed");
     }
@@ -201,12 +203,12 @@ void SignController::clearAllFiles() {
         Serial.println(file);
         
         sign->WriteTextFile(
-            file, 
-            "", 
-            SIGN_DEFAULT_COLOUR, 
-            SIGN_DEFAULT_POSITION, 
-            SIGN_DEFAULT_MODE, 
-            SIGN_DEFAULT_SPECIAL
+            file,
+            " ",
+            SIGN_DEFAULT_COLOUR,
+            BB_DP_TOPLINE,
+            BB_DM_HOLD,
+            BB_SDM_TWINKLE
         );
     }
     

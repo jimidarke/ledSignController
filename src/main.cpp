@@ -39,6 +39,7 @@
 #include "HADiscovery.h"
 #include "HAMQTTClient.h"
 #include "StatusIndicator.h"
+#include "DemoMode.h"
 
 // Third-party libraries
 #include <ArduinoJson.h>
@@ -152,6 +153,20 @@ void syncTime();
 void smartDelay(unsigned long delay_ms);
 void printSystemInfo();
 void handleSystemReset();
+/**
+ * @brief Enter demo mode - takes over the sign and never returns
+ */
+void enterDemoMode() {
+    Serial.println();
+    Serial.println("========================================");
+    Serial.println("=== DEMO MODE ACTIVATED ===");
+    Serial.println("Power cycle to exit");
+    Serial.println("========================================");
+
+    DemoMode demo(&led_sign, status_indicator);
+    demo.run();
+    // Never reached
+}
 
 /**
  * @brief Arduino setup function - runs once at startup
@@ -209,7 +224,7 @@ void loop() {
     static unsigned long last_memory_report = 0;
     static unsigned long last_clock_display = 0;
     unsigned long current_time = millis();
-    
+
     // WiFiManager handles reconnection automatically - no run() needed
     // Check if WiFi disconnected and attempt reconnection
     if (WiFi.status() != WL_CONNECTED) {
@@ -396,11 +411,21 @@ void initializeDevice() {
     status_indicator->begin();
     status_indicator->onBoot();
 
-    // Run boot animation before WiFiManager blocks
+    // Configure demo button (boot button, active LOW with internal pull-up)
+    pinMode(DEMO_BUTTON_PIN, INPUT_PULLUP);
+
+    // Run boot animation — hold boot button during this to enter demo mode
     unsigned long boot_start = millis();
     while (millis() - boot_start < 2000) {
         status_indicator->loop();
         delay(10);
+    }
+
+    // If button is still held after boot animation, enter demo mode
+    if (digitalRead(DEMO_BUTTON_PIN) == LOW) {
+        Serial.println("Boot button held — entering demo mode");
+        enterDemoMode();
+        // Never returns
     }
 
     // Generate unique device ID from MAC address
@@ -416,6 +441,9 @@ void initializeDevice() {
         Serial.println("Warning: LED sign initialization failed");
         // Continue anyway - sign might be temporarily disconnected
     }
+
+    // Clear stale content from sign immediately
+    sign_controller->clearAllFiles();
 
     // Run hardware diagnostic to verify sign communication path
     Serial.println("Running sign hardware diagnostic...");

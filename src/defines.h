@@ -40,6 +40,10 @@
 // Buzzer pin (PWM driven)
 #define BUZZER_PIN      15
 
+// Demo mode button (ESP32 boot button)
+#define DEMO_BUTTON_PIN      0      // GPIO 0 (active LOW, internal pull-up)
+#define DEMO_HOLD_MS         3000   // 3 second hold to trigger demo
+
 // LEDC PWM Channel Assignments (ESP32 has 16 channels, 0-15)
 #define LEDC_CH_RED      0
 #define LEDC_CH_GREEN    1
@@ -113,7 +117,7 @@
 /////////////////////////////////////////////
 
 // Current firmware version (semantic versioning)
-#define FIRMWARE_VERSION          "0.5.0"
+#define FIRMWARE_VERSION          "0.6.0"
 
 // GitHub Repository Configuration
 // TODO: Update these with your actual GitHub username and repository name
