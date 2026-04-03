@@ -36,6 +36,7 @@
 #include "GitHubOTA.h"
 #include "HADiscovery.h"
 #include "HAMQTTClient.h"
+#include "StatusIndicator.h"
 
 // Third-party libraries
 #include <ArduinoJson.h>
@@ -82,6 +83,16 @@ GitHubOTA* ota_manager = nullptr;                ///< GitHub-based OTA update ma
 HADiscovery* ha_discovery = nullptr;             ///< Home Assistant MQTT Discovery
 
 HAMQTTClient* ha_mqtt_client = nullptr;          ///< Secondary MQTT for Home Assistant
+StatusIndicator* status_indicator = nullptr;     ///< RGB LED + Buzzer status feedback
+
+// Storage for dynamic parameters (declared extern in dynamicParams.h)
+char MQTT_Server[MAX_MQTT_SERVER_LEN + 1] = "alert.d-t.pw";
+char MQTT_Port[MAX_MQTT_PORT_LEN + 1] = "42690";
+char MQTT_User[MAX_MQTT_USER_LEN + 1] = "";
+char MQTT_Pass[MAX_MQTT_PASS_LEN + 1] = "";
+char Zone_Name[MAX_ZONE_NAME_LEN + 1] = "CHANGEME";
+char HA_MQTT_Server[MAX_HA_MQTT_SERVER_LEN + 1] = "";
+char HA_MQTT_Port[MAX_HA_MQTT_PORT_LEN + 1] = "1883";
 
 // WiFiManager custom parameters (linked to dynamicParams.h variables)
 // Primary MQTT (Cloud/Alert Manager)
@@ -238,6 +249,8 @@ void loop() {
         if (!services_initialized) {
             Serial.println("WiFi connected - initializing network services");
 
+            if (status_indicator) status_indicator->onWiFiConnected();
+
             // Cancel offline mode if it was running
             if (sign_controller) {
                 sign_controller->cancelOfflineMode();
@@ -251,6 +264,16 @@ void loop() {
             // Handle primary MQTT communication (Alert Manager)
             if (mqtt_manager) {
                 mqtt_manager->loop();
+
+                // Track MQTT connection state for status indicator
+                static bool mqtt_was_connected = false;
+                bool mqtt_now_connected = mqtt_manager->isConnected();
+                if (mqtt_now_connected && !mqtt_was_connected) {
+                    if (status_indicator) status_indicator->onMQTTConnected();
+                } else if (!mqtt_now_connected && mqtt_was_connected) {
+                    if (status_indicator) status_indicator->onMQTTDisconnected();
+                }
+                mqtt_was_connected = mqtt_now_connected;
             }
 
             // Handle secondary MQTT communication (Home Assistant)
@@ -326,6 +349,8 @@ void loop() {
         // WiFi disconnected - show offline information
         services_initialized = false;
 
+        if (status_indicator) status_indicator->onWiFiDisconnected();
+
         if (sign_controller) {
             sign_controller->showOfflineMode();
         }
@@ -342,6 +367,11 @@ void loop() {
     if (sign_controller) {
         sign_controller->loop();
     }
+
+    // Always run status indicator for LED/buzzer timing
+    if (status_indicator) {
+        status_indicator->loop();
+    }
 }
 
 /**
@@ -353,7 +383,19 @@ void loop() {
  */
 void initializeDevice() {
     Serial.println("Initializing device hardware...");
-    
+
+    // Initialize status indicator (RGB LED + Buzzer) early for boot feedback
+    status_indicator = new StatusIndicator();
+    status_indicator->begin();
+    status_indicator->onBoot();
+
+    // Run boot animation before WiFiManager blocks
+    unsigned long boot_start = millis();
+    while (millis() - boot_start < 2000) {
+        status_indicator->loop();
+        delay(10);
+    }
+
     // Generate unique device ID from MAC address
     String mac = WiFi.macAddress();
     mac.replace(":", "");
@@ -396,6 +438,8 @@ void initializeDevice() {
 
     // Auto-connect - will start config portal if no saved credentials
     // This blocks until WiFi is connected or portal times out
+    // Set static red LED during portal (LEDC hardware keeps it lit while WiFiManager blocks)
+    if (status_indicator) status_indicator->setLEDPattern("red");
     Serial.println("Connecting to WiFi (or starting config portal)...");
     if (!wifiManager.autoConnect(SIGN_DEFAULT_SSID, SIGN_DEFAULT_PASS)) {
         Serial.println("WiFi connection failed - restarting in 3 seconds...");
@@ -632,6 +676,23 @@ void initializeNetworkServices() {
                             ESP.restart();
                         });
 
+                        ha_discovery->setLEDModeCallback([](const String& mode) {
+                            Serial.print("HA: LED mode -> ");
+                            Serial.println(mode);
+                            if (status_indicator) status_indicator->setLEDPattern(mode);
+                        });
+
+                        ha_discovery->setBuzzerMuteCallback([](const String& state) {
+                            Serial.print("HA: Buzzer mute -> ");
+                            Serial.println(state);
+                            if (status_indicator) status_indicator->setMuted(state == "ON");
+                        });
+
+                        ha_discovery->setBuzzerTestCallback([]() {
+                            Serial.println("HA: Buzzer test");
+                            if (status_indicator) status_indicator->triggerBuzzer("chime");
+                        });
+
                         Serial.println("Home Assistant Discovery initialized on secondary broker");
                     }
                 } else {
@@ -853,12 +914,12 @@ void handleMQTTMessage(char* topic, uint8_t* payload, unsigned int length) {
             // Display message based on priority
             if (sign_controller) {
                 if (priority) {
-                    // Priority message with dynamic duration
                     sign_controller->displayPriorityMessage(display_text.c_str(), duration);
+                    if (status_indicator) status_indicator->onPriorityAlert();
                 } else {
-                    // Normal message with display config (including charset and speed)
                     sign_controller->displayMessage(display_text.c_str(), color, position, mode, special,
                                                    charset, speed_code);
+                    if (status_indicator) status_indicator->onMessageReceived();
                 }
             }
         } else {
@@ -886,10 +947,9 @@ void handleMQTTMessage(char* topic, uint8_t* payload, unsigned int length) {
 
             if (sign_controller) {
                 if (preset.priority) {
-                    // Critical alert - use priority message
                     sign_controller->displayPriorityMessage(display_text.c_str(), preset.duration);
+                    if (status_indicator) status_indicator->onPriorityAlert();
                 } else {
-                    // Normal alert - display with preset configuration
                     sign_controller->displayMessage(
                         display_text.c_str(),
                         preset.color_code,
@@ -899,6 +959,14 @@ void handleMQTTMessage(char* topic, uint8_t* payload, unsigned int length) {
                         preset.charset_code,
                         preset.speed_code
                     );
+                    // Warning level gets amber flash, others get green flash
+                    if (status_indicator) {
+                        if (strcmp(level, "warning") == 0) {
+                            status_indicator->onWarningAlert();
+                        } else {
+                            status_indicator->onMessageReceived();
+                        }
+                    }
                 }
             }
         }
@@ -963,6 +1031,7 @@ void performHealthCheck() {
                 String status = mqtt_manager->getConnectionStatus();
                 String error_msg = "MQTT: " + status;
                 sign_controller->displayError(error_msg.c_str(), 10);
+                if (status_indicator) status_indicator->onError();
                 mqtt_fail_count = 0; // Reset counter after displaying error
             }
         } else {

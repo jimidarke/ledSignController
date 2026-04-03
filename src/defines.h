@@ -31,6 +31,26 @@
   #define LED_PIN     2
 #endif
 
+// RGB LED pins (common cathode, active HIGH)
+// Note: PCB silkscreen labels red/blue backwards
+#define RGB_RED_PIN     18
+#define RGB_GREEN_PIN   19
+#define RGB_BLUE_PIN    21
+
+// Buzzer pin (PWM driven)
+#define BUZZER_PIN      15
+
+// LEDC PWM Channel Assignments (ESP32 has 16 channels, 0-15)
+#define LEDC_CH_RED      0
+#define LEDC_CH_GREEN    1
+#define LEDC_CH_BLUE     2
+#define LEDC_CH_BUZZER   3
+
+// PWM Configuration
+#define LEDC_RGB_FREQ    5000   // 5kHz for smooth LED dimming
+#define LEDC_RGB_RES     8      // 8-bit resolution (0-255)
+#define LEDC_BUZZER_RES  8      // 8-bit resolution
+
 /////////////////////////////////////////////
 /////// LED SIGN CONTROLLER DEFINES /////////
 /////////////////////////////////////////////
@@ -93,7 +113,7 @@
 /////////////////////////////////////////////
 
 // Current firmware version (semantic versioning)
-#define FIRMWARE_VERSION          "0.3.0"
+#define FIRMWARE_VERSION          "0.4.0"
 
 // GitHub Repository Configuration
 // TODO: Update these with your actual GitHub username and repository name

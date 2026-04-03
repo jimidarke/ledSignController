@@ -115,6 +115,23 @@ public:
     void setRebootCallback(ButtonCallback callback);
 
     /**
+     * @brief Set callback for LED mode changes
+     * @param callback Function receiving mode name string
+     */
+    void setLEDModeCallback(MessageCallback callback);
+
+    /**
+     * @brief Set callback for buzzer mute toggle
+     * @param callback Function receiving "ON" (muted) or "OFF" (unmuted)
+     */
+    void setBuzzerMuteCallback(MessageCallback callback);
+
+    /**
+     * @brief Set callback for test buzzer button
+     */
+    void setBuzzerTestCallback(ButtonCallback callback);
+
+    /**
      * @brief Publish all discovery messages to Home Assistant
      * @return true if all messages published successfully
      */
@@ -186,6 +203,9 @@ private:
     ColorCallback color_callback;
     ButtonCallback clear_callback;
     ButtonCallback reboot_callback;
+    MessageCallback led_mode_callback;
+    MessageCallback buzzer_mute_callback;
+    ButtonCallback buzzer_test_callback;
 
     // Topic builders
     String getDiscoveryTopic(const char* component, const char* object_id) const;
@@ -204,6 +224,9 @@ private:
     bool publishUptimeSensor();
     bool publishIPSensor();
     bool publishMemorySensor();
+    bool publishLEDModeSelect();
+    bool publishBuzzerMuteSwitch();
+    bool publishBuzzerTestButton();
 
     // Helper to build device info JSON object
     void addDeviceInfo(JsonObject& doc);

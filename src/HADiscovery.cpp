@@ -57,6 +57,18 @@ void HADiscovery::setRebootCallback(ButtonCallback callback) {
     reboot_callback = callback;
 }
 
+void HADiscovery::setLEDModeCallback(MessageCallback callback) {
+    led_mode_callback = callback;
+}
+
+void HADiscovery::setBuzzerMuteCallback(MessageCallback callback) {
+    buzzer_mute_callback = callback;
+}
+
+void HADiscovery::setBuzzerTestCallback(ButtonCallback callback) {
+    buzzer_test_callback = callback;
+}
+
 // Topic builders
 String HADiscovery::getDiscoveryTopic(const char* component, const char* object_id) const {
     // Format: homeassistant/{component}/{node_id}/{object_id}/config
@@ -126,6 +138,9 @@ bool HADiscovery::publishDiscovery() {
     success &= publishColorSelect();
     success &= publishClearButton();
     success &= publishRebootButton();
+    success &= publishLEDModeSelect();
+    success &= publishBuzzerMuteSwitch();
+    success &= publishBuzzerTestButton();
 
     // Sensors
     success &= publishStatusSensor();
@@ -153,6 +168,9 @@ bool HADiscovery::removeDiscovery() {
         "select/color",
         "button/clear",
         "button/reboot",
+        "select/led_mode",
+        "switch/buzzer_mute",
+        "button/buzzer_test",
         "binary_sensor/status",
         "sensor/rssi",
         "sensor/uptime",
@@ -187,12 +205,18 @@ bool HADiscovery::subscribeToCommands() {
     String color_cmd = getCommandTopic("color");
     String clear_cmd = getCommandTopic("clear");
     String reboot_cmd = getCommandTopic("reboot");
+    String led_mode_cmd = getCommandTopic("led_mode");
+    String buzzer_mute_cmd = getCommandTopic("buzzer_mute");
+    String buzzer_test_cmd = getCommandTopic("buzzer_test");
 
     success &= mqtt_client->subscribe(message_cmd.c_str());
     success &= mqtt_client->subscribe(effect_cmd.c_str());
     success &= mqtt_client->subscribe(color_cmd.c_str());
     success &= mqtt_client->subscribe(clear_cmd.c_str());
     success &= mqtt_client->subscribe(reboot_cmd.c_str());
+    success &= mqtt_client->subscribe(led_mode_cmd.c_str());
+    success &= mqtt_client->subscribe(buzzer_mute_cmd.c_str());
+    success &= mqtt_client->subscribe(buzzer_test_cmd.c_str());
 
     if (success) {
         Serial.println("HADiscovery: Subscribed to all command topics");
@@ -252,6 +276,29 @@ bool HADiscovery::handleMessage(const char* topic, const uint8_t* payload, unsig
     if (topic_str == getCommandTopic("reboot")) {
         if (reboot_callback) {
             reboot_callback();
+        }
+        return true;
+    }
+
+    if (topic_str == getCommandTopic("led_mode")) {
+        if (led_mode_callback) {
+            led_mode_callback(payload_str);
+        }
+        mqtt_client->publish(getStateTopic("led_mode").c_str(), payload_str.c_str(), true);
+        return true;
+    }
+
+    if (topic_str == getCommandTopic("buzzer_mute")) {
+        if (buzzer_mute_callback) {
+            buzzer_mute_callback(payload_str);
+        }
+        mqtt_client->publish(getStateTopic("buzzer_mute").c_str(), payload_str.c_str(), true);
+        return true;
+    }
+
+    if (topic_str == getCommandTopic("buzzer_test")) {
+        if (buzzer_test_callback) {
+            buzzer_test_callback();
         }
         return true;
     }
@@ -500,4 +547,67 @@ bool HADiscovery::publishMemorySensor() {
     addDeviceInfo(obj);
 
     return publishJson(getDiscoveryTopic("sensor", "memory").c_str(), doc);
+}
+
+bool HADiscovery::publishLEDModeSelect() {
+    DynamicJsonDocument doc(1024);
+
+    doc["name"] = "Status LED";
+    doc["unique_id"] = unique_id_prefix + "_led_mode";
+    doc["command_topic"] = getCommandTopic("led_mode");
+    doc["state_topic"] = getStateTopic("led_mode");
+    doc["icon"] = "mdi:led-on";
+    doc["entity_category"] = HA_CATEGORY_CONFIG;
+
+    JsonArray options = doc.createNestedArray("options");
+    options.add("off");
+    options.add("red");
+    options.add("green");
+    options.add("blue");
+    options.add("amber");
+    options.add("breathe_blue");
+    options.add("rainbow");
+
+    doc["availability_topic"] = getAvailabilityTopic();
+
+    JsonObject obj = doc.as<JsonObject>();
+    addDeviceInfo(obj);
+
+    return publishJson(getDiscoveryTopic("select", "led_mode").c_str(), doc);
+}
+
+bool HADiscovery::publishBuzzerMuteSwitch() {
+    DynamicJsonDocument doc(512);
+
+    doc["name"] = "Buzzer Mute";
+    doc["unique_id"] = unique_id_prefix + "_buzzer_mute";
+    doc["command_topic"] = getCommandTopic("buzzer_mute");
+    doc["state_topic"] = getStateTopic("buzzer_mute");
+    doc["icon"] = "mdi:volume-off";
+    doc["entity_category"] = HA_CATEGORY_CONFIG;
+
+    doc["availability_topic"] = getAvailabilityTopic();
+
+    JsonObject obj = doc.as<JsonObject>();
+    addDeviceInfo(obj);
+
+    return publishJson(getDiscoveryTopic("switch", "buzzer_mute").c_str(), doc);
+}
+
+bool HADiscovery::publishBuzzerTestButton() {
+    DynamicJsonDocument doc(512);
+
+    doc["name"] = "Test Buzzer";
+    doc["unique_id"] = unique_id_prefix + "_buzzer_test";
+    doc["command_topic"] = getCommandTopic("buzzer_test");
+    doc["payload_press"] = "PRESS";
+    doc["icon"] = "mdi:bell-ring";
+    doc["entity_category"] = HA_CATEGORY_CONFIG;
+
+    doc["availability_topic"] = getAvailabilityTopic();
+
+    JsonObject obj = doc.as<JsonObject>();
+    addDeviceInfo(obj);
+
+    return publishJson(getDiscoveryTopic("button", "buzzer_test").c_str(), doc);
 }

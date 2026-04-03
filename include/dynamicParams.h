@@ -21,15 +21,15 @@
 #define MAX_HA_MQTT_PORT_LEN     6
 
 // Primary MQTT (Cloud/Alert Manager) - TLS with optional auth
-char MQTT_Server[MAX_MQTT_SERVER_LEN + 1] = "alert.d-t.pw";
-char MQTT_Port[MAX_MQTT_PORT_LEN + 1] = "42690";      // Alert Manager TLS port
-char MQTT_User[MAX_MQTT_USER_LEN + 1] = "";           // Optional auth
-char MQTT_Pass[MAX_MQTT_PASS_LEN + 1] = "";           // Optional auth
-char Zone_Name[MAX_ZONE_NAME_LEN + 1] = "CHANGEME";
+extern char MQTT_Server[MAX_MQTT_SERVER_LEN + 1];
+extern char MQTT_Port[MAX_MQTT_PORT_LEN + 1];
+extern char MQTT_User[MAX_MQTT_USER_LEN + 1];
+extern char MQTT_Pass[MAX_MQTT_PASS_LEN + 1];
+extern char Zone_Name[MAX_ZONE_NAME_LEN + 1];
 
 // Secondary MQTT (Home Assistant) - Plain, no auth, local LAN
 // Empty server = HA integration disabled
-char HA_MQTT_Server[MAX_HA_MQTT_SERVER_LEN + 1] = "";     // Empty = disabled
-char HA_MQTT_Port[MAX_HA_MQTT_PORT_LEN + 1] = "1883";     // Default plain MQTT
+extern char HA_MQTT_Server[MAX_HA_MQTT_SERVER_LEN + 1];
+extern char HA_MQTT_Port[MAX_HA_MQTT_PORT_LEN + 1];
 
 #endif // dynamicParams_h

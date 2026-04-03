@@ -12,6 +12,9 @@ This is an ESP32-based LED sign controller that connects BetaBrite/Alpha Protoco
 - **BETABRITE Library** (`lib/BETABRITE/`): Custom library for BetaBrite Alpha Protocol over RS232/TTL serial
 - **MQTTManager** (`src/MQTTManager.h/.cpp`): TLS-enabled MQTT client with optional authentication and zone-based routing
 - **SignController** (`src/SignController.h/.cpp`): LED sign control with full protocol access (charset, speed, effects)
+- **StatusIndicator** (`src/StatusIndicator.h/.cpp`): RGB LED + buzzer status feedback facade with priority system
+- **StatusLED** (`src/StatusLED.h/.cpp`): Non-blocking RGB LED pattern driver using ESP32 LEDC PWM
+- **StatusBuzzer** (`src/StatusBuzzer.h/.cpp`): Non-blocking buzzer tone sequence driver using ESP32 LEDC PWM
 - **WiFi Management** (`tzapu/WiFiManager`): WiFi configuration portal with MQTT credentials and zone name
 - **Certificate Storage** (`data/certs/`): LittleFS-based CA certificate storage (only ca.crt needed)
 - **OTA Updates** (`lib/GitHubOTA/`): GitHub Releases-based over-the-air firmware updates with HTTPS and SHA256 verification
@@ -31,7 +34,12 @@ This is an ESP32-based LED sign controller that connects BetaBrite/Alpha Protoco
 - **Configuration Portal**: Web-based setup for WiFi, MQTT settings, and zone configuration
 - **Telemetry**: Publishes RSSI, IP address, uptime, and free memory via MQTT
 - **Secure OTA Updates**: GitHub Releases integration with HTTPS downloads, SHA256 checksum verification, semantic versioning, and automatic periodic checks
+- **Status LED Feedback**: RGB LED provides visual status for WiFi, MQTT, alerts, OTA, and errors with priority-based pattern management
+- **Buzzer Feedback**: Audible tones for boot chime, alerts, warnings, errors, and OTA completion (mutable)
 - **MQTT Test Tool**: `tools/test-mqtt-auth.sh` for validating TLS and connectivity
+- **Sign Diagnostic Tool**: `tools/betabrite_diag.py` for direct serial communication with BetaBrite signs (bypasses ESP32)
+- **Sign Demo Tool**: `tools/sign_demo.py` for cycling through sign colors, modes, effects, and charsets
+- **Racing Countdown**: `tools/racing_countdown.py` for portrait-mode racing start-light animation (red/yellow/green countdown)
 
 ### Message Format (JSON Only - v0.2.0+)
 
@@ -109,8 +117,13 @@ pio run -t clean           # Clean build files
 ## Configuration
 
 ### Hardware Setup
-- ESP32 board (esp32dev)
-- Serial connection to BetaBrite sign (pins 16 RX, 17 TX)
+- ESP32 board (esp32dev) with CH340 USB serial
+- Serial connection to BetaBrite sign via MAX3232 level shifter (GPIO 16 RX, GPIO 17 TX)
+- RGB LED (common cathode): RED=GPIO 18, GREEN=GPIO 19, BLUE=GPIO 21
+  - **Note**: PCB silkscreen labels red/blue backwards — GPIO 18 is red, GPIO 21 is blue
+- Buzzer (PWM driven): GPIO 15
+- FTDI FT232 USB-to-serial adapter for direct sign diagnostics (optional)
+- MAX3232 breakout module TX/RX labels are reversed — connect ESP32 TX to module "RXD" and vice versa
 - WiFi connectivity required for MQTT operations
 
 ### Key Configuration Files
@@ -234,6 +247,8 @@ See `docs/OTA_DEPLOYMENT.md` for complete deployment guide, troubleshooting, and
 - Zone-based topics enable multi-sign deployments: each sign subscribes to `ledSign/{zone}/message`
 - Alert level and category determine display formatting when `display_config` is omitted
 - Priority messages use non-blocking state machine (no blocking delays in loop)
+- **Status LED/Buzzer**: Uses ESP32 LEDC PWM channels 0-3. LED patterns and buzzer tones are non-blocking with priority system (critical > warning > status > idle). Boot animation runs as blocking sequence before WiFiManager. Static LED colors work during blocking calls (LEDC hardware maintains output).
+- **PCB pin labels are wrong**: Red/Blue LED silkscreen labels are swapped. MAX3232 module TX/RX labels are reversed. See `src/defines.h` for correct mappings.
 - TLS certificates and GitHub tokens are stored in SPIFFS (unencrypted) - consider ESP32 flash encryption for high-security deployments
 - **OTA updates**: GitHub Releases-based with HTTPS, SHA256 verification, automatic periodic checks (every 24 hours), and semantic versioning
 - **Partition scheme**: Uses `min_spiffs.csv` for OTA support (2x ~896KB app partitions + ~180KB SPIFFS)
@@ -242,4 +257,5 @@ See `docs/OTA_DEPLOYMENT.md` for complete deployment guide, troubleshooting, and
 - See `docs/OTA_DEPLOYMENT.md` for complete OTA deployment guide
 - See `docs/ESP32_BETABRITE_IMPLEMENTATION.md` for complete Alert Manager integration specification
 - See `test/sample_alerts.json` for 7 example alert messages covering all levels and categories
-- pio commands are run on the host windows pc manually
+- pio commands can be run on the host windows pc or via `~/.platformio/penv/bin/pio` on the linux dev machine
+- **Linux dev setup**: PlatformIO installed in venv at `~/.platformio/penv/`. ESP32 is `/dev/ttyUSB1` (CH340), FTDI for sign diagnostics is `/dev/ttyUSB0`
