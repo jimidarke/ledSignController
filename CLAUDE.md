@@ -39,7 +39,7 @@ This is an ESP32-based LED sign controller that connects BetaBrite/Alpha Protoco
 - **MQTT Test Tool**: `tools/test-mqtt-auth.sh` for validating TLS and connectivity
 - **Sign Diagnostic Tool**: `tools/betabrite_diag.py` for direct serial communication with BetaBrite signs (bypasses ESP32)
 - **Sign Demo Tool**: `tools/sign_demo.py` for cycling through sign colors, modes, effects, and charsets
-- **Racing Countdown**: `tools/racing_countdown.py` for portrait-mode racing start-light animation (red/yellow/green countdown)
+- **Racing Countdown**: `tools/racing_countdown.py` for racing start-light animation (text-based color fills)
 
 ### Message Format (JSON Only - v0.2.0+)
 

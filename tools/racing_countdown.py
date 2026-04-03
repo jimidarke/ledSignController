@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
-Racing Countdown Animation for BetaBrite Sign in Portrait Mode.
+Racing Countdown Animation for BetaBrite 213C LED Sign.
 
-Simulates a racing start-light sequence: RED -> YELLOW -> GREEN,
-designed for the sign rotated 90 degrees clockwise (portrait orientation).
-
-The left side of the sign becomes the top in portrait mode, so the first
-characters in the text string appear at the top of the display.
+Modes:
+  full   - Flash entire sign RED -> YELLOW -> GREEN (default)
+  thirds - Portrait mode with color bands (sign rotated 90deg CW)
 
 Usage:
     python3 tools/racing_countdown.py --port /dev/ttyUSB0
-    python3 tools/racing_countdown.py --port /dev/ttyUSB0 --test-fill
-    python3 tools/racing_countdown.py --port /dev/ttyUSB0 -c 3 --loop
+    python3 tools/racing_countdown.py --port /dev/ttyUSB0 --mode thirds -c 2
+    python3 tools/racing_countdown.py --port /dev/ttyUSB0 --test-chars
+    python3 tools/racing_countdown.py --port /dev/ttyUSB0 --loop
 """
 
 import argparse
@@ -37,12 +36,9 @@ ADDRESS = b"00"
 
 # Display modes
 DM_HOLD = ord('b')
-DM_FLASH = ord('c')
 
 # Display positions
-DP_FILL = 0x30
 DP_TOPLINE = 0x22
-DP_LEFT = 0x31
 
 # Colors
 COL_RED = ord('1')
@@ -55,18 +51,19 @@ FC_SELECTCHARCOLOR = 0x1C
 
 # Character sets
 CS_FULL_HIGH = ord('9')
-CS_10HIGH = ord('6')
-CS_7HIGH = ord('3')
 
 # Verbose logging
 verbose = False
 
 
-def log_hex(direction, data):
+def log_hex(direction, data, max_bytes=60):
     """Log bytes as hex dump."""
-    hex_str = " ".join(f"{b:02X}" for b in data)
-    ascii_str = "".join(chr(b) if 0x20 <= b < 0x7F else "." for b in data)
-    print(f"  {direction}: {hex_str}  |{ascii_str}|")
+    if len(data) <= max_bytes:
+        hex_str = " ".join(f"{b:02X}" for b in data)
+        print(f"  {direction}: {hex_str}")
+    else:
+        hex_str = " ".join(f"{b:02X}" for b in data[:max_bytes])
+        print(f"  {direction}: {hex_str} ... ({len(data)}b)")
 
 
 def build_frame(command_code, payload):
@@ -89,133 +86,136 @@ def send_frame(ser, frame):
 
 
 def configure_memory(ser):
-    """Configure sign memory with a single text file.
-
-    Some BetaBrite signs need memory configured before repeated writes,
-    otherwise rapid writes can cause the sign to reset.
-    """
-    # Write Special Function: Clear memory and allocate file A
-    # Format: E $ [file_label] [type] [lock] [size_hex] [time_hex]
-    payload = b"$"  # Clear memory label
-    payload += b"A"  # File A
-    payload += b"A"  # Type: Text
-    payload += b"L"  # Locked
-    payload += b"0100"  # Size: 256 bytes
-    payload += b"FF00"  # Always on
+    """Configure sign memory with a single text file."""
+    payload = b"$"
+    payload += b"A"      # File A
+    payload += b"A"      # Type: Text
+    payload += b"L"      # Locked
+    payload += b"0100"   # Size: 256 bytes
+    payload += b"FF00"   # Always on
     frame = build_frame(ord('E'), payload)
     send_frame(ser, frame)
-    time.sleep(0.5)  # Give sign time to reconfigure memory
+    time.sleep(0.5)
+
+
+def write_text(ser, text_payload):
+    """Write a text file A with the given pre-built payload content."""
+    payload = bytes([ord('A')])  # File A
+    payload += bytes([ESC, DP_TOPLINE, DM_HOLD])
+    payload += text_payload
+    frame = build_frame(ord('A'), payload)
+    send_frame(ser, frame)
 
 
 def clear_display(ser):
     """Clear the display (go black)."""
-    # Write an empty/space message to file A with HOLD mode
-    payload = bytes([ord('A')])  # File A
-    payload += bytes([ESC, DP_LEFT, DM_HOLD])
-    payload += b" "
-    frame = build_frame(ord('A'), payload)
-    send_frame(ser, frame)
+    write_text(ser, b" ")
 
 
-def write_color_blocks(ser, sections, fill_char='#', charset=CS_FULL_HIGH,
+def build_solid_fill(color, fill_char='#', count=10, charset=CS_FULL_HIGH):
+    """Build payload for a solid color fill of the entire sign."""
+    payload = bytes([FC_SELECTCHARSET, charset])
+    payload += bytes([FC_SELECTCHARCOLOR, color])
+    payload += (fill_char * count).encode('ascii')
+    return payload
+
+
+def build_color_blocks(sections, fill_char='#', charset=CS_FULL_HIGH,
                        total_chars=6):
-    """Write colored block sections to the display.
-
-    Pads with spaces to total_chars so the sign doesn't re-center
-    as new sections are added.
-
-    Args:
-        ser: Serial port
-        sections: List of (color_code, char_count) tuples
-        fill_char: ASCII character to repeat for fill blocks
-        charset: Character set code
-        total_chars: Total display width in chars (pad to this)
-    """
-    payload = bytes([ord('A')])  # File A
-    payload += bytes([ESC, DP_LEFT, DM_HOLD])
-    payload += bytes([FC_SELECTCHARSET, charset])
-
+    """Build payload with colored sections, padded to constant width."""
+    payload = bytes([FC_SELECTCHARSET, charset])
     chars_used = 0
-    for color_code, count in sections:
-        payload += bytes([FC_SELECTCHARCOLOR, color_code])
+    for color, count in sections:
+        payload += bytes([FC_SELECTCHARCOLOR, color])
         payload += (fill_char * count).encode('ascii')
         chars_used += count
-
-    # Pad remaining space so text width is constant (prevents re-centering)
     remaining = total_chars - chars_used
     if remaining > 0:
         payload += b" " * remaining
-
-    frame = build_frame(ord('A'), payload)
-    send_frame(ser, frame)
+    return payload
 
 
-def run_countdown(ser, chars_per_section=3, fill_char='#', delay=1.0,
-                  charset=CS_FULL_HIGH):
-    """Run the racing countdown animation.
+def run_full_countdown(ser, delay=1.0, fill_char='#', fill_count=10):
+    """Full-sign color flash: RED -> YELLOW -> GREEN."""
+    print("Racing countdown (full-sign mode)...")
+    print(f"  fill='{fill_char}' x{fill_count}, delay={delay}s")
 
-    Sequence: black -> red top -> +yellow middle -> +green bottom (hold)
-    """
-    total = chars_per_section * 3
-    print("Starting racing countdown...")
-    print(f"  {chars_per_section} chars/section ({total} total), fill='{fill_char}', "
-          f"delay={delay}s, charset=0x{charset:02X}")
-
-    # Frame 0: Clear (black)
     print("  [BLACK]")
     clear_display(ser)
     time.sleep(delay)
 
-    # Frame 1: Red top third (padded to full width)
     print("  [RED]")
-    write_color_blocks(ser, [(COL_RED, chars_per_section)],
-                       fill_char, charset, total_chars=total)
+    write_text(ser, build_solid_fill(COL_RED, fill_char, fill_count))
     time.sleep(delay)
 
-    # Frame 2: Red + Yellow (padded to full width)
-    print("  [RED + YELLOW]")
-    write_color_blocks(ser, [
-        (COL_RED, chars_per_section),
-        (COL_YELLOW, chars_per_section),
-    ], fill_char, charset, total_chars=total)
+    print("  [YELLOW]")
+    write_text(ser, build_solid_fill(COL_YELLOW, fill_char, fill_count))
     time.sleep(delay)
 
-    # Frame 3: Red + Yellow + Green (full width, no padding needed)
-    print("  [RED + YELLOW + GREEN]")
-    write_color_blocks(ser, [
-        (COL_RED, chars_per_section),
-        (COL_YELLOW, chars_per_section),
-        (COL_GREEN, chars_per_section),
-    ], fill_char, charset, total_chars=total)
+    print("  [GREEN]")
+    write_text(ser, build_solid_fill(COL_GREEN, fill_char, fill_count))
 
-    # Hold the full countdown for a few seconds, then go black
     time.sleep(3)
     print("  [BLACK]")
     clear_display(ser)
     print("  Done.")
 
 
-def run_test_fill(ser, fill_char='#', charset=CS_FULL_HIGH):
-    """Calibration mode: send increasing char counts to find display width.
+def run_thirds_countdown(ser, chars_per_section=2, delay=1.0, fill_char='#'):
+    """Portrait mode: red top -> yellow middle -> green bottom."""
+    total = chars_per_section * 3
+    print("Racing countdown (thirds mode)...")
+    print(f"  {chars_per_section} chars/section ({total} total), "
+          f"fill='{fill_char}', delay={delay}s")
 
-    Watch the sign and note when characters stop appearing (overflow).
-    That tells you the total character capacity, divide by 3 for --chars.
-    """
-    print("=== TEST FILL MODE ===")
-    print(f"Fill char: '{fill_char}', charset: 0x{charset:02X}")
-    print("Watch the sign. Press Ctrl+C when done.\n")
+    print("  [BLACK]")
+    clear_display(ser)
+    time.sleep(delay)
 
-    for count in range(1, 21):
-        print(f"  Sending {count} green chars: '{fill_char * count}'")
-        write_color_blocks(ser, [(COL_GREEN, count)], fill_char, charset)
+    print("  [RED]")
+    write_text(ser, build_color_blocks(
+        [(COL_RED, chars_per_section)],
+        fill_char, total_chars=total))
+    time.sleep(delay)
+
+    print("  [RED + YELLOW]")
+    write_text(ser, build_color_blocks(
+        [(COL_RED, chars_per_section), (COL_YELLOW, chars_per_section)],
+        fill_char, total_chars=total))
+    time.sleep(delay)
+
+    print("  [RED + YELLOW + GREEN]")
+    write_text(ser, build_color_blocks(
+        [(COL_RED, chars_per_section), (COL_YELLOW, chars_per_section),
+         (COL_GREEN, chars_per_section)],
+        fill_char, total_chars=total))
+
+    time.sleep(3)
+    print("  [BLACK]")
+    clear_display(ser)
+    print("  Done.")
+
+
+def run_test_chars(ser):
+    """Cycle through candidate fill characters to find the densest one."""
+    candidates = ['#', 'M', 'W', '@', '8', '0', '%', '&', 'X', 'H', 'N',
+                  'B', 'Q', 'D', 'E']
+    print("=== FILL CHARACTER TEST ===")
+    print("Each character shown in GREEN, full_high font, 6 wide.")
+    print("Watch for which fills the most pixels. Press Ctrl+C to stop.\n")
+
+    for ch in candidates:
+        print(f"  '{ch}'")
+        write_text(ser, build_solid_fill(COL_GREEN, ch, 6))
         try:
-            time.sleep(2)
+            time.sleep(3)
         except KeyboardInterrupt:
-            print(f"\n  Stopped at {count} chars.")
-            print(f"  If all {count} were visible, try: --chars {count // 3}")
+            print(f"\n  Stopped at '{ch}'")
+            clear_display(ser)
             return
 
-    print("\n  Done. Divide the max visible count by 3 for --chars.")
+    print("\nDone. Use --fill-char <char> with your best pick.")
+    clear_display(ser)
 
 
 def open_port(port_path, timeout=2.0):
@@ -233,7 +233,7 @@ def open_port(port_path, timeout=2.0):
         )
         ser.dtr = False
         ser.rts = False
-        print(f"Opened {port_path} at 9600 7E1 (DTR/RTS disabled)")
+        print(f"Opened {port_path} at 9600 7E1")
         return ser
     except serial.SerialException as e:
         print(f"ERROR: Cannot open {port_path}: {e}")
@@ -246,57 +246,60 @@ def main():
     global verbose
 
     parser = argparse.ArgumentParser(
-        description="Racing Countdown Animation for Portrait BetaBrite Sign")
-    parser.add_argument("--port", "-p", default="/dev/ttyUSB0",
-                        help="Serial port (default: /dev/ttyUSB0)")
-    parser.add_argument("--chars", "-c", type=int, default=3,
-                        help="Characters per color section (default: 3, tune with --test-fill)")
+        description="Racing Countdown for BetaBrite 213C LED Sign")
+    parser.add_argument("--port", "-p", default="/dev/ttyUSB0")
+    parser.add_argument("--mode", choices=["full", "thirds"], default="full",
+                        help="full = whole sign flashes each color; "
+                             "thirds = portrait bands (default: full)")
+    parser.add_argument("--delay", "-d", type=float, default=1.0,
+                        help="Seconds between stages (default: 1.0)")
     parser.add_argument("--fill-char", default="#",
                         help="Fill character (default: #)")
-    parser.add_argument("--delay", "-d", type=float, default=1.0,
-                        help="Delay between stages in seconds (default: 1.0)")
-    parser.add_argument("--charset", default="9",
-                        choices=["3", "5", "6", "9"],
-                        help="Charset: 3=7high, 5=7fancy, 6=10high, 9=full_high (default: 9)")
+    parser.add_argument("--fill-count", type=int, default=10,
+                        help="Chars to send in full mode (default: 10, overflow clipped)")
+    parser.add_argument("--chars", "-c", type=int, default=2,
+                        help="Chars per section in thirds mode (default: 2)")
     parser.add_argument("--loop", "-l", action="store_true",
                         help="Loop the animation")
     parser.add_argument("--loop-delay", type=float, default=3.0,
-                        help="Seconds to hold before restarting loop (default: 3.0)")
-    parser.add_argument("--test-fill", action="store_true",
-                        help="Calibration mode: send increasing chars to find display width")
-    parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Print hex dumps of frames")
+                        help="Seconds between loops (default: 3.0)")
+    parser.add_argument("--test-chars", action="store_true",
+                        help="Cycle through fill characters to find densest")
+    parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
     verbose = args.verbose
-    charset = ord(args.charset)
-
     ser = open_port(args.port)
 
     try:
         print("Configuring sign memory...")
         configure_memory(ser)
 
-        if args.test_fill:
-            run_test_fill(ser, fill_char=args.fill_char, charset=charset)
+        if args.test_chars:
+            run_test_chars(ser)
         elif args.loop:
-            print("Looping countdown (Ctrl+C to stop)...")
+            print(f"Looping {args.mode} countdown (Ctrl+C to stop)...")
             while True:
-                run_countdown(ser, chars_per_section=args.chars,
-                              fill_char=args.fill_char, delay=args.delay,
-                              charset=charset)
+                if args.mode == "full":
+                    run_full_countdown(ser, args.delay, args.fill_char,
+                                       args.fill_count)
+                else:
+                    run_thirds_countdown(ser, args.chars, args.delay,
+                                         args.fill_char)
                 time.sleep(args.loop_delay)
         else:
-            run_countdown(ser, chars_per_section=args.chars,
-                          fill_char=args.fill_char, delay=args.delay,
-                          charset=charset)
-            # Hold port open briefly to avoid sign reset from DTR toggle
-            time.sleep(5)
+            if args.mode == "full":
+                run_full_countdown(ser, args.delay, args.fill_char,
+                                   args.fill_count)
+            else:
+                run_thirds_countdown(ser, args.chars, args.delay,
+                                     args.fill_char)
     except KeyboardInterrupt:
         print("\nStopped.")
+        clear_display(ser)
     finally:
         ser.close()
-        print(f"Port closed.")
+        print("Port closed.")
 
 
 if __name__ == "__main__":
