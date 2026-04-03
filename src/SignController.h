@@ -266,6 +266,13 @@ public:
      * @return Status string indicating sign health
      */
     String getStatus() const;
+
+    /**
+     * @brief Run hardware diagnostic - ping sign and report
+     * Attempts to read from the sign to verify bidirectional communication.
+     * @return true if sign responded, false otherwise
+     */
+    bool runDiagnostic();
     
     /**
      * @brief Set sign memory configuration

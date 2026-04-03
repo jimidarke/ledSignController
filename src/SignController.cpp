@@ -522,6 +522,39 @@ void SignController::setClockEnabled(bool enabled, unsigned long duration) {
     }
 }
 
+bool SignController::runDiagnostic() {
+    if (!sign) {
+        Serial.println("DIAG: No sign instance");
+        return false;
+    }
+
+    Serial.println("DIAG: Pinging sign (read time-of-day)...");
+
+    if (sign->PingSign(2000)) {
+        Serial.println("DIAG: Sign responded - bidirectional communication OK");
+
+        // Try reading text file A
+        char buf[128];
+        int result = sign->ReadTextFile('A', buf, sizeof(buf), 1000);
+        if (result > 0) {
+            Serial.print("DIAG: File A content (");
+            Serial.print(result);
+            Serial.print(" bytes): ");
+            Serial.println(buf);
+        } else {
+            Serial.println("DIAG: File A empty or read not supported");
+        }
+
+        return true;
+    }
+
+    Serial.println("DIAG: No response from sign");
+    Serial.println("DIAG: Write commands may still work (many signs are write-only)");
+    Serial.println("DIAG: Check wiring: ESP32 GPIO17(TX) -> MAX3232 -> RS232 -> Sign");
+    Serial.println("DIAG:               Sign -> RS232 -> MAX3232 -> ESP32 GPIO16(RX)");
+    return false;
+}
+
 String SignController::getStatus() const {
     String status = "SignController Status:\n";
     status += "  Current File: " + String(current_file) + "\n";

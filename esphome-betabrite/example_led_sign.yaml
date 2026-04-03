@@ -1,5 +1,5 @@
 # =============================================================================
-# BetaBrite LED Sign - Minimal Example
+# BetaBrite LED Sign - v1 PCB Implementation
 # =============================================================================
 #
 # QUICK START:
@@ -8,9 +8,13 @@
 #   3. Compile and upload
 #   4. In Home Assistant, find "LED Sign Message" text entity - type to display!
 #
-# WIRING:
+# WIRING (v1 PCB):
 #   ESP32 GPIO17 (TX) --> RS232 Adapter TX --> BetaBrite RX
 #   ESP32 GPIO16 (RX) --> RS232 Adapter RX --> BetaBrite TX
+#   ESP32 GPIO15      --> Piezoelectric Buzzer
+#   ESP32 GPIO18      --> RGB LED Red
+#   ESP32 GPIO19      --> RGB LED Green
+#   ESP32 GPIO21      --> RGB LED Blue
 #   Use MAX3232 or similar level shifter (BetaBrite uses ±12V RS232!)
 #
 # =============================================================================
@@ -18,6 +22,7 @@
 substitutions:
   name: "led-sign"
   friendly_name: "LED Sign"
+  zone_name: "default"  # Change for multi-sign deployments
 
 esphome:
   name: ${name}
@@ -31,6 +36,12 @@ logger:
 api:
   encryption:
     key: !secret api_encryption_key
+  on_client_connected:
+    - lambda: 'id(ha_connected) = true;'
+    - logger.log: "Home Assistant connected"
+  on_client_disconnected:
+    - lambda: 'id(ha_connected) = false;'
+    - logger.log: "Home Assistant disconnected"
 
 ota:
   - platform: esphome
@@ -45,15 +56,210 @@ wifi:
 captive_portal:
 
 # -----------------------------------------------------------------------------
+# Time Sync (NTP)
+# -----------------------------------------------------------------------------
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "America/Denver"  # Mountain Time
+    on_time_sync:
+      - logger.log: "Time synchronized via NTP"
+
+# -----------------------------------------------------------------------------
+# Connection State Globals
+# -----------------------------------------------------------------------------
+
+globals:
+  - id: ha_connected
+    type: bool
+    initial_value: "false"
+  - id: mqtt_connected
+    type: bool
+    initial_value: "false"
+  - id: priority_active
+    type: bool
+    initial_value: "false"
+  - id: priority_end_time
+    type: uint32_t
+    initial_value: "0"
+
+# -----------------------------------------------------------------------------
+# MQTT Integration (Alert Manager Compatible)
+# -----------------------------------------------------------------------------
+
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_user
+  password: !secret mqtt_password
+  discovery: false
+  reboot_timeout: 0s  # Don't reboot on MQTT failure - stay available for HA
+
+  on_connect:
+    - lambda: 'id(mqtt_connected) = true;'
+    - logger.log: "MQTT connected"
+
+  on_disconnect:
+    - lambda: 'id(mqtt_connected) = false;'
+    - logger.log: "MQTT disconnected"
+
+  on_json_message:
+    - topic: ledSign/${zone_name}/message
+      then:
+        - lambda: |-
+            // Parse alert level and category
+            std::string level = "info";
+            std::string category = "system";
+            std::string title = "";
+            std::string message = "";
+
+            if (x.containsKey("level")) {
+              level = x["level"].as<std::string>();
+            }
+            if (x.containsKey("category")) {
+              category = x["category"].as<std::string>();
+            }
+            if (x.containsKey("title")) {
+              title = x["title"].as<std::string>();
+            }
+            if (x.containsKey("message")) {
+              message = x["message"].as<std::string>();
+            }
+
+            // Build display text
+            std::string display_text = title;
+            if (!message.empty()) {
+              if (!display_text.empty()) display_text += " - ";
+              display_text += message;
+            }
+
+            // Default presets based on level
+            std::string color = "green";
+            std::string mode = "rotate";
+            std::string effect = "twinkle";
+            std::string charset = "7high";
+            int speed = 3;
+            bool is_priority = false;
+            int duration = 15;
+
+            if (level == "critical") {
+              color = "red";
+              mode = "flash";
+              effect = "bomb";
+              charset = "10high";
+              is_priority = true;
+              duration = 60;
+            } else if (level == "warning") {
+              color = "amber";
+              mode = "scroll";
+              effect = "twinkle";
+              duration = 30;
+            } else if (level == "notice") {
+              color = "green";
+              mode = "wipein";
+              effect = "welcome";
+              duration = 20;
+            }
+
+            // Category-specific effects
+            if (category == "security") {
+              effect = "trumpet";
+            } else if (category == "weather") {
+              effect = "snow";
+            } else if (category == "automation") {
+              effect = "welcome";
+            } else if (category == "personal") {
+              effect = "sparkle";
+            }
+
+            // Override with display_config if present
+            if (x.containsKey("display_config")) {
+              auto config = x["display_config"];
+              if (config.containsKey("color_code")) {
+                std::string cc = config["color_code"].as<std::string>();
+                if (cc == "1") color = "red";
+                else if (cc == "2") color = "green";
+                else if (cc == "3") color = "amber";
+                else if (cc == "7") color = "orange";
+                else if (cc == "8") color = "yellow";
+              }
+              if (config.containsKey("mode_code")) {
+                std::string mc = config["mode_code"].as<std::string>();
+                if (mc == "a") mode = "rotate";
+                else if (mc == "b") mode = "hold";
+                else if (mc == "c") mode = "flash";
+                else if (mc == "m") mode = "scroll";
+              }
+              if (config.containsKey("priority")) {
+                is_priority = config["priority"].as<bool>();
+              }
+              if (config.containsKey("duration")) {
+                duration = config["duration"].as<int>();
+              }
+            }
+
+            ESP_LOGI("mqtt", "Alert: level=%s, category=%s, text=%s",
+                     level.c_str(), category.c_str(), display_text.c_str());
+
+            // Update select entities to reflect current settings
+            auto call_color = id(color_select).make_call();
+            call_color.set_option(color);
+            call_color.perform();
+
+            auto call_mode = id(mode_select).make_call();
+            call_mode.set_option(mode);
+            call_mode.perform();
+
+            auto call_effect = id(effect_select).make_call();
+            call_effect.set_option(effect);
+            call_effect.perform();
+
+            // Flash status LED green briefly for message received
+            auto call_led = id(status_led).turn_on();
+            call_led.set_rgb(0.0, 1.0, 0.0);
+            call_led.set_brightness(1.0);
+            call_led.perform();
+
+        # Display the message using current select values
+        - betabrite.display:
+            id: led_sign
+            text: !lambda |-
+              std::string title = "";
+              std::string message = "";
+              if (x.containsKey("title")) title = x["title"].as<std::string>();
+              if (x.containsKey("message")) message = x["message"].as<std::string>();
+              std::string text = title;
+              if (!message.empty()) {
+                if (!text.empty()) text += " - ";
+                text += message;
+              }
+              return text;
+            color: !lambda 'return id(color_select).state;'
+            mode: !lambda 'return id(mode_select).state;'
+            effect: !lambda 'return id(effect_select).state;'
+            charset: !lambda 'return id(charset_select).state;'
+            position: !lambda 'return id(position_select).state;'
+            speed: !lambda 'return (int)id(speed_number).state;'
+
+        # Turn off status LED after brief flash
+        - delay: 500ms
+        - light.turn_off: status_led
+
+        # Play buzzer for critical alerts
+        - if:
+            condition:
+              lambda: 'return x.containsKey("level") && x["level"].as<std::string>() == "critical";'
+            then:
+              - rtttl.play: "alert:d=4,o=5,b=180:c6,p,c6,p,c6"
+
+# -----------------------------------------------------------------------------
 # BetaBrite Component
 # -----------------------------------------------------------------------------
 
 external_components:
   - source:
-      type: git
-      url: https://github.com/jimidarke/ledSignController
-      ref: main
-      path: esphome-betabrite/components
+      type: local
+      path: components
     components: [betabrite]
 
 uart:
@@ -68,6 +274,103 @@ uart:
 betabrite:
   id: led_sign
   uart_id: sign_uart
+  clock:
+    enabled: false  # Don't auto-show clock; use "Show Clock" button instead
+
+# -----------------------------------------------------------------------------
+# Hardware: Piezoelectric Buzzer (GPIO15)
+# -----------------------------------------------------------------------------
+
+output:
+  - platform: ledc
+    pin: GPIO15
+    id: buzzer_output
+
+  # RGB LED outputs (LEDC PWM for brightness control)
+  - platform: ledc
+    pin: GPIO18
+    id: led_red
+  - platform: ledc
+    pin: GPIO19
+    id: led_green
+  - platform: ledc
+    pin: GPIO21
+    id: led_blue
+
+rtttl:
+  output: buzzer_output
+  id: buzzer
+
+# -----------------------------------------------------------------------------
+# Hardware: RGB Status LED (GPIO18/19/21)
+# -----------------------------------------------------------------------------
+
+light:
+  - platform: rgb
+    id: status_led
+    name: "Status LED"
+    internal: true  # Not exposed to HA
+    red: led_red
+    green: led_green
+    blue: led_blue
+    effects:
+      - strobe:
+          name: "Flash Red"
+          colors:
+            - state: true
+              red: 100%
+              green: 0%
+              blue: 0%
+              duration: 250ms
+            - state: false
+              duration: 250ms
+      - strobe:
+          name: "Flash Amber"
+          colors:
+            - state: true
+              red: 100%
+              green: 50%
+              blue: 0%
+              duration: 300ms
+            - state: false
+              duration: 300ms
+      - pulse:
+          name: "Breathe Blue"
+          transition_length: 1s
+          update_interval: 1s
+      - pulse:
+          name: "Slow Cyan"
+          transition_length: 2s
+          update_interval: 2s
+
+# -----------------------------------------------------------------------------
+# Status LED Update Interval
+# -----------------------------------------------------------------------------
+
+interval:
+  - interval: 2s
+    then:
+      - lambda: |-
+          // Priority: WiFi > MQTT > HA > Normal
+          if (!WiFi.isConnected()) {
+            // WiFi disconnected - flash red
+            auto call = id(status_led).turn_on();
+            call.set_effect("Flash Red");
+            call.perform();
+          } else if (!id(mqtt_connected)) {
+            // MQTT disconnected - flash amber
+            auto call = id(status_led).turn_on();
+            call.set_effect("Flash Amber");
+            call.perform();
+          } else if (!id(ha_connected)) {
+            // HA disconnected - breathe blue
+            auto call = id(status_led).turn_on();
+            call.set_effect("Breathe Blue");
+            call.perform();
+          } else {
+            // All connected - turn off (or dim green heartbeat)
+            id(status_led).turn_off().perform();
+          }
 
 # -----------------------------------------------------------------------------
 # Home Assistant Controls
@@ -92,28 +395,187 @@ text:
                 text: !lambda 'return x;'
                 color: !lambda 'return id(color_select).state;'
                 mode: !lambda 'return id(mode_select).state;'
+                effect: !lambda 'return id(effect_select).state;'
+                charset: !lambda 'return id(charset_select).state;'
+                position: !lambda 'return id(position_select).state;'
+                speed: !lambda 'return (int)id(speed_number).state;'
 
-# COLOR PICKER
+  - platform: template
+    name: "Priority Message"
+    id: priority_message_input
+    icon: "mdi:alert"
+    optimistic: true
+    min_length: 0
+    max_length: 125
+    mode: text
+    on_value:
+      - if:
+          condition:
+            lambda: 'return x.length() > 0;'
+          then:
+            - betabrite.priority:
+                id: led_sign
+                text: !lambda 'return x;'
+                duration: !lambda 'return (int)id(priority_duration_number).state;'
+            - lambda: |-
+                id(priority_active) = true;
+                id(priority_end_time) = millis() + ((uint32_t)id(priority_duration_number).state * 1000);
+            - rtttl.play: "priority:d=4,o=5,b=200:c6,e6,g6"
+
+# SELECT ENTITIES - All BetaBrite Protocol Options
+
 select:
+  # COLOR PICKER - All 12 colors
   - platform: template
     name: "Color"
     id: color_select
     icon: "mdi:palette"
     optimistic: true
-    options: ["green", "red", "amber", "orange", "yellow", "rainbow1"]
+    options:
+      - "red"
+      - "green"
+      - "amber"
+      - "dimred"
+      - "dimgreen"
+      - "brown"
+      - "orange"
+      - "yellow"
+      - "rainbow1"
+      - "rainbow2"
+      - "colormix"
+      - "autocolor"
     initial_option: "green"
 
-  # MODE PICKER
+  # MODE PICKER - All 21 display modes
   - platform: template
     name: "Mode"
     id: mode_select
     icon: "mdi:animation"
     optimistic: true
-    options: ["rotate", "hold", "scroll", "flash"]
+    options:
+      - "rotate"
+      - "hold"
+      - "flash"
+      - "rollup"
+      - "rolldown"
+      - "rollleft"
+      - "rollright"
+      - "wipeup"
+      - "wipedown"
+      - "wipeleft"
+      - "wiperight"
+      - "scroll"
+      - "special"
+      - "automode"
+      - "rollin"
+      - "rollout"
+      - "wipein"
+      - "wipeout"
+      - "comprotate"
+      - "explode"
+      - "clock"
     initial_option: "rotate"
 
-# CLEAR BUTTON
+  # EFFECT PICKER - All 20 special effects + none
+  - platform: template
+    name: "Effect"
+    id: effect_select
+    icon: "mdi:shimmer"
+    optimistic: true
+    options:
+      - "none"
+      - "twinkle"
+      - "sparkle"
+      - "snow"
+      - "interlock"
+      - "switch"
+      - "slide"
+      - "spray"
+      - "starburst"
+      - "welcome"
+      - "slots"
+      - "newsflash"
+      - "trumpet"
+      - "cyclecolors"
+      - "thankyou"
+      - "nosmoking"
+      - "dontdrinkanddrive"
+      - "fishimal"
+      - "fireworks"
+      - "turballoon"
+      - "bomb"
+    initial_option: "twinkle"
+
+  # CHARSET PICKER - All 14 character sets
+  - platform: template
+    name: "Charset"
+    id: charset_select
+    icon: "mdi:format-font"
+    optimistic: true
+    options:
+      - "5high"
+      - "5stroke"
+      - "7high"
+      - "7stroke"
+      - "7highfancy"
+      - "10high"
+      - "7shadow"
+      - "fhighfancy"
+      - "fhigh"
+      - "7shadowfancy"
+      - "5wide"
+      - "7wide"
+      - "7widefancy"
+      - "5widestroke"
+    initial_option: "7high"
+
+  # POSITION PICKER - All 6 positions
+  - platform: template
+    name: "Position"
+    id: position_select
+    icon: "mdi:format-vertical-align-center"
+    optimistic: true
+    options:
+      - "midline"
+      - "topline"
+      - "botline"
+      - "fill"
+      - "left"
+      - "right"
+    initial_option: "topline"
+
+# NUMBER ENTITIES
+
+number:
+  # SPEED - 1 (slowest) to 5 (fastest)
+  - platform: template
+    name: "Speed"
+    id: speed_number
+    icon: "mdi:speedometer"
+    optimistic: true
+    min_value: 1
+    max_value: 5
+    step: 1
+    initial_value: 3
+    mode: slider
+
+  # PRIORITY DURATION - How long priority messages display
+  - platform: template
+    name: "Priority Duration"
+    id: priority_duration_number
+    icon: "mdi:timer"
+    optimistic: true
+    min_value: 5
+    max_value: 300
+    step: 5
+    initial_value: 25
+    unit_of_measurement: "s"
+    mode: slider
+
+# BUTTONS
+
 button:
+  # CLEAR BUTTON
   - platform: template
     name: "Clear"
     icon: "mdi:eraser"
@@ -121,34 +583,34 @@ button:
       - betabrite.clear:
           id: led_sign
 
-  # SYNC TIME BUTTON
+  # DEMO BUTTON
   - platform: template
-    name: "Sync Time"
-    icon: "mdi:clock-sync"
+    name: "Demo"
+    icon: "mdi:play-circle"
     on_press:
-      - betabrite.set_time:
+      - betabrite.demo:
           id: led_sign
-          hour: !lambda 'return id(ha_time).now().hour;'
-          minute: !lambda 'return id(ha_time).now().minute;'
-          month: !lambda 'return id(ha_time).now().month;'
-          day: !lambda 'return id(ha_time).now().day_of_month;'
-          year: !lambda 'return id(ha_time).now().year;'
-          day_of_week: !lambda 'return id(ha_time).now().day_of_week;'
 
-# -----------------------------------------------------------------------------
-# Time Sync from Home Assistant
-# -----------------------------------------------------------------------------
-time:
-  - platform: homeassistant
-    id: ha_time
-    timezone: America/Denver
-    on_time_sync:
-      # Automatically sync sign clock when HA time updates
-      - betabrite.set_time:
+  # SHOW CLOCK BUTTON
+  - platform: template
+    name: "Show Clock"
+    icon: "mdi:clock-outline"
+    on_press:
+      - betabrite.clock:
           id: led_sign
-          hour: !lambda 'return id(ha_time).now().hour;'
-          minute: !lambda 'return id(ha_time).now().minute;'
-          month: !lambda 'return id(ha_time).now().month;'
-          day: !lambda 'return id(ha_time).now().day_of_month;'
-          year: !lambda 'return id(ha_time).now().year;'
-          day_of_week: !lambda 'return id(ha_time).now().day_of_week;'
+
+  # CANCEL PRIORITY BUTTON
+  - platform: template
+    name: "Cancel Priority"
+    icon: "mdi:close-circle"
+    on_press:
+      - betabrite.cancel_priority:
+          id: led_sign
+      - lambda: 'id(priority_active) = false;'
+
+  # TEST BUZZER BUTTON
+  - platform: template
+    name: "Test Buzzer"
+    icon: "mdi:volume-high"
+    on_press:
+      - rtttl.play: "beep:d=4,o=5,b=140:c6,p,c6"

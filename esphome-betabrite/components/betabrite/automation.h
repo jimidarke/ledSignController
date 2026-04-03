@@ -26,14 +26,37 @@ class DisplayMessageAction : public Action<Ts...> {
   TEMPLATABLE_VALUE(std::string, color)
   TEMPLATABLE_VALUE(std::string, mode)
   TEMPLATABLE_VALUE(std::string, effect)
+  TEMPLATABLE_VALUE(std::string, charset)
+  TEMPLATABLE_VALUE(std::string, position)
+  TEMPLATABLE_VALUE(int32_t, speed)
 
-  void play(const Ts &...x) override {
+  void play(Ts... x) override {
     std::string msg = this->message_.value(x...);
     std::string col = this->color_.has_value() ? this->color_.value(x...) : "";
     std::string mod = this->mode_.has_value() ? this->mode_.value(x...) : "";
     std::string eff = this->effect_.has_value() ? this->effect_.value(x...) : "";
+    std::string cset = this->charset_.has_value() ? this->charset_.value(x...) : "";
+    std::string pos = this->position_.has_value() ? this->position_.value(x...) : "";
+    int32_t spd = this->speed_.has_value() ? this->speed_.value(x...) : 0;
 
-    if (col.empty() && mod.empty() && eff.empty()) {
+    // Check if extended parameters are provided
+    bool has_extended = !cset.empty() || !pos.empty() || spd > 0;
+
+    if (has_extended) {
+      // Use full method with all parameters
+      CharColor color_enum = col.empty() ? COL_GREEN : color_from_string(col);
+      DisplayMode mode_enum = mod.empty() ? DM_ROTATE : mode_from_string(mod);
+      CharSet charset_enum = cset.empty() ? CS_7HIGH : charset_from_string(cset);
+      DisplayPosition pos_enum = pos.empty() ? DP_TOPLINE : position_from_string(pos);
+      int speed_val = spd > 0 ? spd : 3;
+
+      // Handle "none" effect
+      bool use_effect = !eff.empty() && eff != "none";
+      SpecialMode effect_enum = use_effect ? effect_from_string(eff) : SDM_TWINKLE;
+
+      this->parent_->display_message_full(msg, color_enum, mode_enum, charset_enum,
+                                          pos_enum, speed_val, effect_enum, use_effect);
+    } else if (col.empty() && mod.empty() && eff.empty()) {
       this->parent_->display_message(msg);
     } else {
       this->parent_->display_message(msg, col, mod, eff);
@@ -52,7 +75,7 @@ class ClearAction : public Action<Ts...> {
  public:
   explicit ClearAction(BetaBriteComponent *parent) : parent_(parent) {}
 
-  void play(const Ts &...x) override {
+  void play(Ts... x) override {
     this->parent_->clear_display();
   }
 
@@ -71,7 +94,7 @@ class PriorityMessageAction : public Action<Ts...> {
   TEMPLATABLE_VALUE(std::string, message)
   TEMPLATABLE_VALUE(uint32_t, duration)
 
-  void play(const Ts &...x) override {
+  void play(Ts... x) override {
     std::string msg = this->message_.value(x...);
     uint32_t dur = this->duration_.has_value() ? this->duration_.value(x...) : 0;
     this->parent_->display_priority_message(msg, dur);
@@ -89,7 +112,7 @@ class DemoAction : public Action<Ts...> {
  public:
   explicit DemoAction(BetaBriteComponent *parent) : parent_(parent) {}
 
-  void play(const Ts &...x) override {
+  void play(Ts... x) override {
     this->parent_->run_demo();
   }
 
@@ -105,7 +128,7 @@ class CancelPriorityAction : public Action<Ts...> {
  public:
   explicit CancelPriorityAction(BetaBriteComponent *parent) : parent_(parent) {}
 
-  void play(const Ts &...x) override {
+  void play(Ts... x) override {
     this->parent_->cancel_priority_message();
   }
 
@@ -121,7 +144,7 @@ class DisplayClockAction : public Action<Ts...> {
  public:
   explicit DisplayClockAction(BetaBriteComponent *parent) : parent_(parent) {}
 
-  void play(const Ts &...x) override {
+  void play(Ts... x) override {
     this->parent_->display_clock();
   }
 
@@ -145,7 +168,7 @@ class SetTimeAction : public Action<Ts...> {
   TEMPLATABLE_VALUE(uint8_t, day_of_week)
   TEMPLATABLE_VALUE(bool, use_24h)
 
-  void play(const Ts &...x) override {
+  void play(Ts... x) override {
     uint8_t h = this->hour_.has_value() ? this->hour_.value(x...) : 0;
     uint8_t m = this->minute_.has_value() ? this->minute_.value(x...) : 0;
     uint8_t mo = this->month_.has_value() ? this->month_.value(x...) : 1;

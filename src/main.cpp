@@ -367,7 +367,11 @@ void initializeDevice() {
         Serial.println("Warning: LED sign initialization failed");
         // Continue anyway - sign might be temporarily disconnected
     }
-    
+
+    // Run hardware diagnostic to verify sign communication path
+    Serial.println("Running sign hardware diagnostic...");
+    sign_controller->runDiagnostic();
+
     // Initialize WiFi manager (tzapu/WiFiManager)
     Serial.println("Initializing WiFi manager...");
 

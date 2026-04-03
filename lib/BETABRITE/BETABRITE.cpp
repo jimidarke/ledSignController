@@ -222,6 +222,151 @@ void BETABRITE::SetDateTime ( DateTime now, bool UseMilitaryTime )
 }
 #endif
 
+int BETABRITE::ReadTextFile ( const char Name, char *buffer, size_t bufferSize, unsigned long timeoutMs )
+{
+  // Flush any stale data in receive buffer
+  while ( this->available() ) this->read();
+
+  BeginCommand();
+  BeginNestedCommand();
+  print ( BB_CC_RTEXT );
+  print ( Name );
+  EndCommand();
+
+  DelayBetweenCommands();
+  return ReadResponse ( buffer, bufferSize, timeoutMs );
+}
+
+int BETABRITE::ReadSpecialFunction ( const char Label, char *buffer, size_t bufferSize, unsigned long timeoutMs )
+{
+  while ( this->available() ) this->read();
+
+  BeginCommand();
+  BeginNestedCommand();
+  print ( BB_CC_RSPFUNC );
+  print ( Label );
+  EndCommand();
+
+  DelayBetweenCommands();
+  return ReadResponse ( buffer, bufferSize, timeoutMs );
+}
+
+int BETABRITE::ReadStringFile ( const char Name, char *buffer, size_t bufferSize, unsigned long timeoutMs )
+{
+  while ( this->available() ) this->read();
+
+  BeginCommand();
+  BeginNestedCommand();
+  print ( BB_CC_RSTRING );
+  print ( Name );
+  EndCommand();
+
+  DelayBetweenCommands();
+  return ReadResponse ( buffer, bufferSize, timeoutMs );
+}
+
+bool BETABRITE::PingSign ( unsigned long timeoutMs )
+{
+  char buf[64];
+  int result = ReadSpecialFunction ( ' ', buf, sizeof(buf), timeoutMs );
+  return ( result > 0 );
+}
+
+int BETABRITE::ReadResponse ( char *buffer, size_t bufferSize, unsigned long timeoutMs )
+{
+  unsigned long startTime = millis();
+
+  // Wait for first byte (SOH) with timeout
+  while ( !this->available() )
+  {
+    if ( millis() - startTime > timeoutMs ) return -1;
+    delay ( 1 );
+  }
+
+  // Scan for SOH byte
+  bool foundSOH = false;
+  while ( millis() - startTime < timeoutMs )
+  {
+    if ( this->available() )
+    {
+      int b = this->read();
+      if ( b == BB_SOH )
+      {
+        foundSOH = true;
+        break;
+      }
+    }
+    else
+    {
+      delay ( 1 );
+    }
+  }
+
+  if ( !foundSOH ) return -1;
+
+  // Read type byte and 2-byte address (skip them)
+  for ( int i = 0; i < 3; i++ )
+  {
+    unsigned long byteStart = millis();
+    while ( !this->available() )
+    {
+      if ( millis() - byteStart > 200 ) return -1;
+      delay ( 1 );
+    }
+    this->read();
+  }
+
+  // Wait for STX
+  bool foundSTX = false;
+  while ( millis() - startTime < timeoutMs )
+  {
+    if ( this->available() )
+    {
+      int b = this->read();
+      if ( b == BB_STX )
+      {
+        foundSTX = true;
+        break;
+      }
+    }
+    else
+    {
+      delay ( 1 );
+    }
+  }
+
+  if ( !foundSTX ) return -1;
+
+  // Read payload bytes until ETX or EOT
+  size_t count = 0;
+  while ( millis() - startTime < timeoutMs )
+  {
+    if ( this->available() )
+    {
+      int b = this->read();
+      if ( b == BB_ETX || b == BB_EOT ) break;
+      if ( count < bufferSize - 1 )
+      {
+        buffer[count++] = (char)b;
+      }
+    }
+    else
+    {
+      // Short inter-byte timeout
+      delay ( 1 );
+      unsigned long idleStart = millis();
+      while ( !this->available() && millis() - idleStart < 200 )
+      {
+        delay ( 1 );
+      }
+      if ( !this->available() ) break; // Timed out between bytes
+    }
+  }
+
+  buffer[count] = '\0'; // Null-terminate
+  return (int)count;
+}
+
 void BETABRITE::Sync ( void )
 {
   for ( char i = 0; i < 5; i++ ) print ( BB_NUL );

@@ -96,9 +96,9 @@ MODES = [
     "wipein", "wipeout", "comprotate", "explode", "clock"
 ]
 
-# Special effect options
+# Special effect options (includes "none" to disable effects)
 EFFECTS = [
-    "twinkle", "sparkle", "snow", "interlock", "switch", "slide",
+    "none", "twinkle", "sparkle", "snow", "interlock", "switch", "slide",
     "spray", "starburst", "welcome", "slots", "newsflash", "trumpet",
     "cyclecolors", "thankyou", "nosmoking", "dontdrinkanddrive",
     "fishimal", "fireworks", "turballoon", "bomb"
@@ -262,6 +262,9 @@ DISPLAY_MESSAGE_ACTION_SCHEMA = cv.Schema({
     cv.Optional(CONF_COLOR): cv.templatable(cv.one_of(*COLORS, lower=True)),
     cv.Optional(CONF_MODE): cv.templatable(cv.one_of(*MODES, lower=True)),
     cv.Optional(CONF_EFFECT): cv.templatable(cv.one_of(*EFFECTS, lower=True)),
+    cv.Optional(CONF_CHARSET): cv.templatable(cv.one_of(*CHARSETS, lower=True)),
+    cv.Optional(CONF_POSITION): cv.templatable(cv.one_of(*POSITIONS, lower=True)),
+    cv.Optional(CONF_SPEED): cv.templatable(cv.int_range(min=1, max=5)),
 })
 
 
@@ -288,6 +291,18 @@ async def betabrite_display_action_to_code(config, action_id, template_arg, args
     if CONF_EFFECT in config:
         effect_template = await cg.templatable(config[CONF_EFFECT], args, cg.std_string)
         cg.add(var.set_effect(effect_template))
+
+    if CONF_CHARSET in config:
+        charset_template = await cg.templatable(config[CONF_CHARSET], args, cg.std_string)
+        cg.add(var.set_charset(charset_template))
+
+    if CONF_POSITION in config:
+        position_template = await cg.templatable(config[CONF_POSITION], args, cg.std_string)
+        cg.add(var.set_position(position_template))
+
+    if CONF_SPEED in config:
+        speed_template = await cg.templatable(config[CONF_SPEED], args, cg.int32)
+        cg.add(var.set_speed(speed_template))
 
     return var
 

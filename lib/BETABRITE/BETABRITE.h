@@ -47,10 +47,21 @@ class BETABRITE : public HardwareSerial  {
     void EndCommand ( void );
     void EndNestedCommand ( void );
     void DelayBetweenCommands ( void );
+
+    // Read commands - query the sign for stored data
+    // Returns number of payload bytes read into buffer, or -1 on timeout
+    int ReadTextFile ( const char Name, char *buffer, size_t bufferSize, unsigned long timeoutMs = 2000 );
+    int ReadSpecialFunction ( const char Label, char *buffer, size_t bufferSize, unsigned long timeoutMs = 2000 );
+    int ReadStringFile ( const char Name, char *buffer, size_t bufferSize, unsigned long timeoutMs = 2000 );
+
+    // Diagnostic - returns true if sign responds to a read command
+    bool PingSign ( unsigned long timeoutMs = 2000 );
+
 #ifdef DATEFUNCTIONS
     void SetDateTime ( DateTime now, bool UseMilitaryTime = false );
 #endif
   private:
+    int ReadResponse ( char *buffer, size_t bufferSize, unsigned long timeoutMs );
     char	_type;
     char	_address[2];
     void Sync ( void );
