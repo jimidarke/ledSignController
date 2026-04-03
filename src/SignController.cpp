@@ -6,6 +6,7 @@
  * message display, priority handling, clock management, and system commands.
  */
 
+#include "defines.h"
 #include "SignController.h"
 #include <time.h>
 
@@ -43,16 +44,18 @@ bool SignController::begin() {
     if (!configureMemory()) {
         Serial.println("SignController: Warning - Memory configuration failed");
     }
-    
-    // Display initial message
-    Serial.println("SignController: Displaying initial message");
-    sign->WritePriorityTextFile(
-        SIGN_INIT_STRING, 
-        SIGN_INIT_COLOUR, 
-        SIGN_INIT_POSITION, 
-        SIGN_INIT_MODE, 
+
+    // Display boot greeting on the sign
+    Serial.println("SignController: Displaying boot greeting");
+    sign->WriteTextFile(
+        'A',
+        SIGN_INIT_STRING,
+        SIGN_INIT_COLOUR,
+        SIGN_INIT_POSITION,
+        SIGN_INIT_MODE,
         SIGN_INIT_SPECIAL
     );
+    delay(200); // Give sign time to process
     
     // Reset state
     in_priority_mode = false;
@@ -76,7 +79,7 @@ bool SignController::configureMemory(char start_file, int num_files) {
     Serial.println(num_files);
     
     sign->SetMemoryConfiguration(start_file, num_files);
-    delay(500); // Give sign time to process configuration
+    delay(1000); // Give sign time to process memory clear and reconfiguration
     Serial.println("SignController: Memory configuration complete");
     return true;
 }
@@ -550,8 +553,8 @@ bool SignController::runDiagnostic() {
 
     Serial.println("DIAG: No response from sign");
     Serial.println("DIAG: Write commands may still work (many signs are write-only)");
-    Serial.println("DIAG: Check wiring: ESP32 GPIO17(TX) -> MAX3232 -> RS232 -> Sign");
-    Serial.println("DIAG:               Sign -> RS232 -> MAX3232 -> ESP32 GPIO16(RX)");
+    Serial.println("DIAG: Check wiring: ESP32 GPIO16(TX) -> MAX3232 -> RS232 -> Sign");
+    Serial.println("DIAG:               Sign -> RS232 -> MAX3232 -> ESP32 GPIO17(RX)");
     return false;
 }
 

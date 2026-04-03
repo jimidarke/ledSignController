@@ -18,7 +18,7 @@
  * Hardware Requirements:
  * - ESP32 development board
  * - BetaBrite LED sign with RS232/TTL interface
- * - Serial connection: RX pin 16, TX pin 17
+ * - Serial connection: RX pin 17, TX pin 16
  * 
  * @author LED Sign Controller Project
  * @version 0.1.4
@@ -76,7 +76,7 @@ const char* ntp_server = "pool.ntp.org";
  */
 WiFiClient wifi_client;                          ///< WiFi client for network operations
 WiFiManager wifiManager;                         ///< WiFi configuration manager (tzapu/WiFiManager)
-BETABRITE led_sign(1, 16, 17);                  ///< BetaBrite sign interface (ID=1, RX=16, TX=17)
+BETABRITE led_sign(1, 17, 16);                  ///< BetaBrite sign interface (ID=1, RX=17, TX=16)
 MQTTManager* mqtt_manager = nullptr;             ///< MQTT connection manager
 SignController* sign_controller = nullptr;       ///< LED sign control interface
 GitHubOTA* ota_manager = nullptr;                ///< GitHub-based OTA update manager
@@ -111,6 +111,7 @@ WiFiManagerParameter custom_ha_mqtt_port("ha_port", "HA MQTT Port", HA_MQTT_Port
  */
 String device_id;                               ///< Unique device identifier (from MAC)
 bool services_initialized = false;             ///< Whether network services are ready
+bool time_synced = false;                      ///< Whether NTP time has been successfully synced
 unsigned long last_health_check = 0;           ///< Last system health check timestamp
 unsigned long last_time_sync = 0;              ///< Last NTP time synchronization
 unsigned long last_offline_log = 0;            ///< Last offline status log message timestamp
@@ -334,8 +335,8 @@ void loop() {
                 last_time_sync = current_time;
             }
 
-            // Periodic clock display (every 60 seconds for 4 seconds, unless priority message active)
-            if (current_time - last_clock_display > CLOCK_DISPLAY_INTERVAL) {
+            // Periodic clock display (every 60 seconds, unless priority message active or time not synced)
+            if (time_synced && current_time - last_clock_display > CLOCK_DISPLAY_INTERVAL) {
                 if (sign_controller && !sign_controller->isInPriorityMode()) {
                     sign_controller->displayClock();
                     last_clock_display = current_time;
@@ -443,6 +444,8 @@ void initializeDevice() {
     Serial.println("Connecting to WiFi (or starting config portal)...");
     if (!wifiManager.autoConnect(SIGN_DEFAULT_SSID, SIGN_DEFAULT_PASS)) {
         Serial.println("WiFi connection failed - restarting in 3 seconds...");
+        if (sign_controller) sign_controller->displayError("WiFi Failed - Rebooting", 3);
+        if (status_indicator) status_indicator->onError();
         delay(3000);
         ESP.restart();
     }
@@ -497,11 +500,18 @@ void initializeNetworkServices() {
             Serial.print("Current time: ");
             Serial.print(asctime(&timeinfo));
             last_time_sync = millis();
+            time_synced = true;
+
+            // Show clock on sign now that time is valid (replaces boot hello message)
+            if (sign_controller) {
+                sign_controller->displayClock();
+            }
         } else {
             Serial.println("Warning: NTP synchronization failed");
             if (sign_controller) {
                 sign_controller->displayError("NTP Sync Failed", 5);
             }
+            if (status_indicator) status_indicator->onError();
         }
         
         // Initialize MQTT manager with zone name (per ESP32_BETABRITE_IMPLEMENTATION.md)
@@ -548,9 +558,13 @@ void initializeNetworkServices() {
                         Serial.println("MQTT manager initialized successfully");
                     } else {
                         Serial.println("Warning: MQTT manager initialization failed");
+                        if (sign_controller) sign_controller->displayError("MQTT Init Failed", 5);
+                        if (status_indicator) status_indicator->onError();
                     }
                 } else {
                     Serial.println("Warning: MQTT configuration invalid");
+                    if (sign_controller) sign_controller->displayError("MQTT Config Invalid", 5);
+                    if (status_indicator) status_indicator->onError();
                 }
             } else {
                 Serial.println("Info: MQTT not configured - check WiFi portal");
@@ -1082,6 +1096,7 @@ void syncTime() {
     if (getLocalTime(&timeinfo)) {
         Serial.print("Time synchronized: ");
         Serial.print(asctime(&timeinfo));
+        time_synced = true;
 
         // Display current time on sign
         if (sign_controller && !sign_controller->isInPriorityMode()) {
@@ -1092,6 +1107,7 @@ void syncTime() {
         if (sign_controller) {
             sign_controller->displayError("NTP Sync Failed", 5);
         }
+        if (status_indicator) status_indicator->onError();
     }
 }
 

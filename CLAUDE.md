@@ -118,12 +118,12 @@ pio run -t clean           # Clean build files
 
 ### Hardware Setup
 - ESP32 board (esp32dev) with CH340 USB serial
-- Serial connection to BetaBrite sign via MAX3232 level shifter (GPIO 16 RX, GPIO 17 TX)
+- Serial connection to BetaBrite sign via MAX3232 level shifter (GPIO 17 RX, GPIO 16 TX)
 - RGB LED (common cathode): RED=GPIO 18, GREEN=GPIO 19, BLUE=GPIO 21
   - **Note**: PCB silkscreen labels red/blue backwards — GPIO 18 is red, GPIO 21 is blue
 - Buzzer (PWM driven): GPIO 15
 - FTDI FT232 USB-to-serial adapter for direct sign diagnostics (optional)
-- MAX3232 breakout module TX/RX labels are reversed — connect ESP32 TX to module "RXD" and vice versa
+- MAX3232 breakout module: ESP32 TX (GPIO 16) connects to module TXD, ESP32 RX (GPIO 17) connects to module RXD
 - WiFi connectivity required for MQTT operations
 
 ### Key Configuration Files

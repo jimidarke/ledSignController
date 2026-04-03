@@ -104,9 +104,9 @@
 // Initialization Message
 #define SIGN_INIT_COLOUR          BB_COL_GREEN
 #define SIGN_INIT_POSITION        BB_DP_TOPLINE
-#define SIGN_INIT_MODE            BB_DM_ROTATE
+#define SIGN_INIT_MODE            BB_DM_SCROLL
 #define SIGN_INIT_SPECIAL         BB_SDM_WELCOME
-#define SIGN_INIT_STRING          "Alert Manager Ready"
+#define SIGN_INIT_STRING          "Hello!"
 
 /////////////////////////////////////////////
 /////// OTA UPDATE CONFIGURATION ////////////
